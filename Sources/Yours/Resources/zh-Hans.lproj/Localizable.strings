@@ -170,3 +170,20 @@
 "navigation.back" = "后退";
 
 "navigation.forward" = "前进";
+
+"editor.category.text" = "文字";
+"editor.category.lists" = "列表";
+"editor.category.blocks" = "内容块";
+"editor.no_results" = "没有匹配的命令";
+"editor.mixed" = "混合";
+"editor.enabled" = "已启用";
+"editor.more" = "更多格式";
+"editor.rows" = "行数";
+"editor.columns" = "列数";
+"common.apply" = "应用";
+"editor.heading.level1" = "标题 1";
+"editor.heading.level2" = "标题 2";
+"editor.heading.level3" = "标题 3";
+"editor.heading.level4" = "标题 4";
+"editor.heading.level5" = "标题 5";
+"editor.heading.level6" = "标题 6";

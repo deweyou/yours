@@ -1522,9 +1522,9 @@ enum NativeTextAttributes {
         else { return CTFontCreateCopyWithAttributes(font, size, nil, nil) }
         let name: String
         if role.hasPrefix("heading:") {
-            name = emphasis & 1 != 0 ? BundledSerifFont.boldName : BundledSerifFont.semiboldName
+            name = emphasis & 1 != 0 ? BundledSerifFont.heavyName : BundledSerifFont.mediumName
         } else {
-            name = traits.contains(.traitBold) || emphasis & 1 != 0 ? BundledSerifFont.boldName : BundledSerifFont.regularName
+            name = traits.contains(.traitBold) || emphasis & 1 != 0 ? BundledSerifFont.boldName : BundledSerifFont.lightName
         }
         // Source Han Serif has no italic face. Apply a display-only oblique matrix;
         // the original system font retains its italic and weight semantics for storage.

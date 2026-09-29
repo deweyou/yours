@@ -25,8 +25,8 @@ struct BodyTypographyTests {
             let display = try #require(native.attribute(.font, at: 0, effectiveRange: nil) as? PlatformFont) as CTFont
             let expectedName =
                 role.hasPrefix("heading:")
-                ? (emphasis & 1 != 0 ? BundledSerifFont.boldName : BundledSerifFont.semiboldName)
-                : (emphasis & 1 != 0 ? BundledSerifFont.boldName : BundledSerifFont.regularName)
+                ? (emphasis & 1 != 0 ? BundledSerifFont.heavyName : BundledSerifFont.mediumName)
+                : (emphasis & 1 != 0 ? BundledSerifFont.boldName : BundledSerifFont.lightName)
             #expect(CTFontCopyPostScriptName(display) as String == expectedName)
             #expect(abs(CTFontGetSize(display) - CTFontGetSize(original) * DocumentTypography.readingScale) < 0.001)
             #expect((CTFontGetMatrix(display).c != 0) == (emphasis & 2 != 0))
@@ -92,7 +92,7 @@ struct BodyTypographyTests {
         let native = NativeTextAttributes.native(text, context: context)
         let display = try #require(native.attribute(.font, at: 0, effectiveRange: nil) as? PlatformFont) as CTFont
         #expect(
-            CTFontCopyPostScriptName(display) as String == (emphasis & 1 != 0 ? BundledSerifFont.boldName : BundledSerifFont.regularName))
+            CTFontCopyPostScriptName(display) as String == (emphasis & 1 != 0 ? BundledSerifFont.boldName : BundledSerifFont.lightName))
         #expect((CTFontGetMatrix(display).c != 0) == (emphasis & 2 != 0))
         let restored = NativeTextAttributes.rich(native)
         let original = try #require(restored.font).resolve(in: context).ctFont
@@ -106,7 +106,7 @@ struct BodyTypographyTests {
         let header = NativeTextAttributes.displayFont(Font.body.weight(.semibold).resolve(in: context).ctFont)
         let body = NativeTextAttributes.displayFont(Font.body.resolve(in: context).ctFont)
         #expect(CTFontCopyPostScriptName(header) as String == BundledSerifFont.boldName)
-        #expect(CTFontCopyPostScriptName(body) as String == BundledSerifFont.regularName)
+        #expect(CTFontCopyPostScriptName(body) as String == BundledSerifFont.lightName)
         #expect(CTFontGetSize(header) == CTFontGetSize(body))
     }
     @Test(arguments: ["body", "heading:2", "quote"])

@@ -10,6 +10,8 @@ import SwiftUI
 struct NativeRichTextEditor {
     @Binding var text: AttributedString
     @Binding var selection: AttributedTextSelection
+    var commandBridge: EditorCommandBridge?
+    var documentID: UUID?
     var focusWhenEmpty = true
     var focusRequest = 0
     var onEditLink: () -> Void = {}
@@ -30,6 +32,13 @@ struct NativeRichTextEditor {
         private var handledFocusRequest: Int
         weak var textView: PlatformTextView?
         private let inputFeatures = EditorFeatureRegistry()
+        private let controls = NativeEditorControls()
+        private var slashAnchor: Int?
+        private var pendingSlash = false
+        var suppressSlashTrigger = false
+        private var controlsSuppressed = false
+        private var revision = 0
+        private var controlsTargetRange = NSRange(location: 0, length: 0)
         private let tables = TableOverlayController()
         private let codeHeaders = CodeHeaderOverlayController()
 
@@ -47,7 +56,7 @@ struct NativeRichTextEditor {
             #endif
         }
 
-        private var currentSelection: NSRange {
+        fileprivate var currentSelection: NSRange {
             #if os(macOS)
                 textView?.selectedRange() ?? NSRange(location: 0, length: 0)
             #else
@@ -97,6 +106,10 @@ struct NativeRichTextEditor {
         }
 
         func update(_ parent: NativeRichTextEditor) {
+            if parent.documentID != self.parent.documentID {
+                revision += 1
+                dismissControls()
+            }
             self.parent = parent
             guard let textView, !hasMarkedText else { return }
             isUpdating = true
@@ -105,6 +118,8 @@ struct NativeRichTextEditor {
                 refreshTables()
             }
             if parent.text != lastValue {
+                revision += 1
+                dismissControls()
                 #if os(macOS)
                     (textView.layoutManager as? CodeLayoutManager)?.clearLinkHover()
                 #endif
@@ -137,6 +152,7 @@ struct NativeRichTextEditor {
             {
                 nativeAttributes[.paragraphStyle] = storage.attribute(.paragraphStyle, at: paragraphRange.location, effectiveRange: nil)
             }
+            nativeAttributes = positionedHeadingTypingAttributes(nativeAttributes, at: range.location, in: source as String)
             nativeAttributes.removeValue(forKey: .attachment)
             nativeAttributes.removeValue(forKey: .yoursTable)
             let localAttributes = locallyAppliedTypingAttributes
@@ -185,6 +201,7 @@ struct NativeRichTextEditor {
                 NativeTextAttributes.highlightCode(storage, around: affected)
                 isUpdating = false
             }
+            revision += 1
             let value = NativeTextAttributes.rich(storage)
             lastValue = value
             parent.text = value
@@ -398,6 +415,7 @@ struct NativeRichTextEditor {
         }
 
         func pasteStructured() -> Bool {
+            dismissControls()
             #if os(macOS)
                 let pasteboard = NSPasteboard.general
                 let encoded = pasteboard.data(forType: NSPasteboard.PasteboardType("app.yours.richtext"))
@@ -463,6 +481,8 @@ struct NativeRichTextEditor {
             guard !isUpdating, !hasMarkedText, let textView, let storage, let replacement,
                 textView.undoManager?.isUndoing != true, textView.undoManager?.isRedoing != true
             else { return true }
+            if !suppressSlashTrigger, replacement == "/", range.length == 0 { pendingSlash = true }
+            if slashAnchor != nil, replacement == "\n" { return !handleControlKey("return") }
             textView.typingAttributes.removeValue(forKey: .attachment)
             textView.typingAttributes.removeValue(forKey: .yoursTable)
             let context = EditorInputContext(
@@ -941,6 +961,256 @@ struct NativeRichTextEditor {
             return true
         }
 
+        func refreshControlPosition() {
+            guard controls.isShowing, !controls.hasDetail else { return }
+            refreshControls()
+        }
+
+        func dismissRootControls() {
+            guard !controls.hasDetail else { return }
+            dismissControls()
+        }
+
+        func dismissControls() {
+            slashAnchor = nil
+            pendingSlash = false
+            controlsSuppressed = true
+            controls.close()
+        }
+
+        func controlsAfterTyping() {
+            guard !isUpdating, let storage, let view = textView else { return }
+            guard !hasMarkedText else {
+                controls.close()
+                return
+            }
+            if view.undoManager?.isUndoing == true || view.undoManager?.isRedoing == true {
+                dismissControls()
+                return
+            }
+            if controls.hasDetail { dismissControls() }
+            if pendingSlash {
+                slashAnchor = EditorSlashQuery.detect(in: storage.string, caret: currentSelection.location)?.range.location
+                pendingSlash = false
+            }
+            controlsSuppressed = false
+            refreshControls()
+        }
+
+        func controlsAfterSelection() {
+            guard !isUpdating else { return }
+            if controls.hasDetail {
+                guard currentSelection != controlsTargetRange else { return }
+                dismissControls()
+            }
+            if hasMarkedText {
+                controls.close()
+                return
+            }
+            controlsSuppressed = false
+            refreshControls()
+        }
+
+        func refreshControls() {
+            guard !isUpdating, !hasMarkedText, let view = textView, let storage else { return }
+            if controls.hasDetail { return }
+            let range = currentSelection
+            let query = EditorSlashQuery.detect(in: storage.string, caret: range.location)
+            let isSlash = range.length == 0 && slashAnchor != nil && query?.range.location == slashAnchor
+            if !isSlash { slashAnchor = nil }
+            #if os(macOS)
+                guard view.selectedRanges.count == 1,
+                    view.window?.firstResponder === view,
+                    NSApp.currentEvent?.type != .leftMouseDragged
+                else {
+                    controls.close()
+                    return
+                }
+            #endif
+            guard !controlsSuppressed, isSlash || range.length > 0 else {
+                controls.close()
+                return
+            }
+            let rich = NativeTextAttributes.rich(storage)
+            if !isSlash, let selected = Range<AttributedString.Index>(range, in: rich),
+                rich[selected].runs.contains(where: { $0[TableAttribute.self] != nil })
+            {
+                controls.close()
+                return
+            }
+            controlsTargetRange = range
+            let attributes = Array(parent.selection.attributes(in: rich))
+            let definitions: [(String, String, String, EditorAction)] = [
+                ("bold", "format.bold", "bold", .emphasis(1)),
+                ("italic", "format.italic", "italic", .emphasis(2)),
+                ("underline", "format.underline", "underline", .underline),
+                ("strike", "format.strikethrough", "strikethrough", .strike),
+                ("inline-code", "format.monospaced", "chevron.left.forwardslash.chevron.right", .inlineCode),
+                ("link", "link.add_or_edit", "link", .link(nil)),
+                ("quote", "format.quote", "text.quote", .quote),
+                ("indent", "format.list.indent", "increase.indent", .indent(false)),
+                ("outdent", "format.list.outdent", "decrease.indent", .indent(true)),
+                ("clear", "format.clear", "textformat", .clear),
+            ]
+            controls.state.items =
+                definitions.map { id, key, symbol, action in
+                    let active = attributes.map { EditorCommandEditing.isActive(action, attributes: $0, context: parent.fontContext) }
+                    return EditorControlItem(
+                        id: id, title: L10n.string(String.LocalizationValue(key)), symbol: symbol, action: action,
+                        enabled: EditorCommandEditing.isAllowed(action, text: rich, range: range),
+                        active: !active.isEmpty && active.allSatisfy { $0 }, mixed: active.contains(true) && active.contains(false))
+                }
+                + EditorCommandCatalog.paragraphs.filter { $0.id != "table" && $0.id != "quote" }.map {
+                    EditorControlItem(
+                        id: "paragraph-" + $0.id, title: $0.title, symbol: $0.symbol, action: $0.action,
+                        enabled: EditorCommandEditing.isAllowed($0.action, text: rich, range: range))
+                }
+            controls.state.isSlash = isSlash
+            controls.state.address = attributes.compactMap { $0.link?.absoluteString }.first ?? ""
+            if isSlash {
+                let previousID =
+                    controls.state.commands.indices.contains(controls.state.highlighted)
+                    ? controls.state.commands[controls.state.highlighted].id : nil
+                controls.state.commands = EditorCommandCatalog.matching(query?.query ?? "")
+                controls.state.highlighted = controls.state.commands.firstIndex { $0.id == previousID } ?? 0
+                // Block structures never offer commands from inside code or attachments.
+                let sample = range.location > 0 ? storage.attributes(at: range.location - 1, effectiveRange: nil) : view.typingAttributes
+                if sample[.yoursCodeStyle] != nil || sample[.yoursTable] != nil || sample[.link] != nil {
+                    dismissControls()
+                    return
+                }
+            }
+            let expectedRevision = revision
+            let expectedDocument = parent.documentID
+            controls.state.choose = { [weak self] action in
+                guard let self, self.revision == expectedRevision, self.parent.documentID == expectedDocument else { return }
+                self.performControlAction(action, range: range, slash: isSlash ? query?.range : nil)
+            }
+            controls.state.cancel = { [weak self] in self?.dismissControls() }
+            #if os(macOS)
+                controls.show(in: view, range: range)
+            #else
+                if isSlash { controls.show(in: view, range: range) }
+            #endif
+        }
+
+        func handleControlKey(_ key: String) -> Bool {
+            guard !hasMarkedText, controls.isShowing else { return false }
+            if key == "escape" {
+                dismissControls()
+                return true
+            }
+            guard slashAnchor != nil, !controls.hasDetail else { return false }
+            let count = controls.state.commands.count
+            if key == "up" || key == "down" {
+                if count > 0 { controls.state.highlighted = (controls.state.highlighted + (key == "up" ? count - 1 : 1)) % count }
+                return true
+            }
+            if key == "tab" {
+                dismissControls()
+                return false
+            }
+            if key == "return" {
+                guard count > 0 else {
+                    dismissControls()
+                    return false
+                }
+                let command = controls.state.commands[controls.state.highlighted]
+                if command.id == "table" { controls.state.open("table") } else { controls.state.choose(command.action) }
+                return true
+            }
+            return false
+        }
+
+        func presentControlDetail(_ kind: String, range capturedRange: NSRange? = nil) {
+            guard !hasMarkedText, let view = textView, let storage else { return }
+            let range = capturedRange ?? currentSelection
+            controlsTargetRange = range
+            let expected = revision
+            let document = parent.documentID
+            if kind == "link" {
+                let rich = NativeTextAttributes.rich(storage)
+                guard EditorCommandEditing.isAllowed(.link(nil), text: rich, range: range),
+                    let selected = Range<AttributedString.Index>(range, in: rich)
+                else { return }
+                controls.state.address = rich[selected].runs.compactMap { $0.link?.absoluteString }.first ?? ""
+            }
+            controls.state.choose = { [weak self] action in
+                guard let self, self.revision == expected, self.parent.documentID == document else { return }
+                self.performControlAction(action, range: range)
+            }
+            controls.state.cancel = { [weak self] in self?.dismissControls() }
+            controls.state.detail = kind
+            #if os(macOS)
+                controls.show(in: view, range: range)
+                controls.state.open(kind)
+            #else
+                controls.showDetail(in: view)
+            #endif
+        }
+
+        func performControlAction(_ action: EditorAction, range: NSRange, slash: NSRange? = nil) {
+            guard !hasMarkedText, let storage, let view = textView, NSMaxRange(range) <= storage.length else { return }
+            var rich = NativeTextAttributes.rich(storage)
+            var target = range
+            if let slash {
+                guard let deletion = Range<AttributedString.Index>(slash, in: rich),
+                    !rich[deletion].runs.contains(where: {
+                        $0[CodeStyleAttribute.self] != nil || $0.link != nil || $0[TableAttribute.self] != nil
+                    })
+                else { return }
+                rich.removeSubrange(deletion)
+                target = NSRange(location: slash.location, length: 0)
+            }
+            guard EditorCommandEditing.isAllowed(action, text: rich, range: target),
+                let selected = Range<AttributedString.Index>(target, in: rich)
+            else { return }
+            let sample = NativeTextAttributes.rich(NSAttributedString(string: " ", attributes: view.typingAttributes))
+            var selection =
+                selected.isEmpty
+                ? AttributedTextSelection(insertionPoint: selected.lowerBound, typingAttributes: sample.runs.first?.attributes)
+                : AttributedTextSelection(range: selected)
+            let previousTables = Set(rich.runs.compactMap { $0[TableAttribute.self]?.id })
+            EditorCommandEditing.apply(action, text: &rich, selection: &selection, context: parent.fontContext, setQuote: slash != nil)
+            let resultRange: NSRange
+            switch selection.indices(in: rich) {
+            case .insertionPoint(let caret): resultRange = NSRange(caret..<caret, in: rich)
+            case .ranges(let ranges):
+                guard let first = ranges.ranges.first, let last = ranges.ranges.last else { return }
+                resultRange = NSRange(first.lowerBound..<last.upperBound, in: rich)
+            }
+            let typing = NativeTextAttributes.native(
+                AttributedString(" ", attributes: selection.typingAttributes(in: rich)), context: parent.fontContext
+            ).attributes(at: 0, effectiveRange: nil)
+            let next = NativeTextAttributes.native(rich, context: parent.fontContext)
+            if next.isEqual(to: storage), NSDictionary(dictionary: typing).isEqual(to: view.typingAttributes) {
+                dismissControls()
+                return
+            }
+            #if os(macOS)
+                view.breakUndoCoalescing()
+            #endif
+            registerUndo(
+                text: NSAttributedString(attributedString: storage), selection: currentSelection, attributes: view.typingAttributes)
+            dismissControls()
+            apply(text: next, selection: resultRange, attributes: typing)
+            #if os(macOS)
+                view.window?.makeKey()
+                view.window?.makeFirstResponder(view)
+            #else
+                view.becomeFirstResponder()
+            #endif
+            if case .table = action,
+                let id = rich.runs.compactMap({ $0[TableAttribute.self]?.id }).first(where: { !previousTables.contains($0) })
+            {
+                tables.focusFirstCell(id: id)
+            }
+            if resultRange.length > 0 {
+                controlsSuppressed = false
+                refreshControls()
+            }
+        }
+
         private func registerUndo(text: NSAttributedString, selection: NSRange, attributes: [NSAttributedString.Key: Any]) {
             textView?.undoManager?.registerUndo(withTarget: self) { coordinator in
                 // UndoManager calls the registered target on the AppKit main
@@ -950,6 +1220,7 @@ struct NativeRichTextEditor {
                     coordinator.registerUndo(
                         text: NSAttributedString(attributedString: current), selection: coordinator.currentSelection,
                         attributes: view.typingAttributes)
+                    coordinator.dismissControls()
                     coordinator.apply(text: text, selection: selection, attributes: attributes)
                 }
             }
@@ -1030,10 +1301,29 @@ struct NativeRichTextEditor {
             #endif
         }
 
+        private func positionedHeadingTypingAttributes(
+            _ attributes: [NSAttributedString.Key: Any], at insertion: Int, in text: String
+        ) -> [NSAttributedString.Key: Any] {
+            guard let role = attributes[.yoursParagraphStyle] as? String,
+                let heading = DocumentTypography.heading(for: role),
+                let paragraph = (attributes[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle
+            else { return attributes }
+            let source = text as NSString
+            let start = source.paragraphRange(for: NSRange(location: min(insertion, source.length), length: 0)).location
+            // Synthetic typing samples start at zero; an empty heading elsewhere
+            // must already reserve the same before-spacing as its first character.
+            paragraph.paragraphSpacingBefore = start == 0 ? 0 : heading.before
+            var result = attributes
+            result[.paragraphStyle] = paragraph
+            return result
+        }
+
         private func apply(text: NSAttributedString, selection: NSRange, attributes: [NSAttributedString.Key: Any]) {
+            revision += 1
             isUpdating = true
             storage?.setAttributedString(text)
             setSelection(selection)
+            let attributes = positionedHeadingTypingAttributes(attributes, at: selection.location, in: text.string)
             textView?.typingAttributes = attributes
             locallyAppliedTypingAttributes = attributes
             #if os(macOS)
@@ -1051,6 +1341,14 @@ struct NativeRichTextEditor {
 
 #if os(macOS)
     final class ReadingMacTextView: NSTextView {
+        var selectionFinished: (() -> Void)?
+        var dismissControlMenus: (() -> Void)?
+        override func menu(for event: NSEvent) -> NSMenu? {
+            dismissControlMenus?()
+            return super.menu(for: event)
+        }
+        var suppressSlash: ((Bool) -> Void)?
+
         private final class QuoteDecorationView: NSView {
             weak var owner: ReadingMacTextView?
 
@@ -1100,7 +1398,11 @@ struct NativeRichTextEditor {
         }
         override func copy(_ sender: Any?) { if copyStructured?(false) != true { super.copy(sender) } }
         override func cut(_ sender: Any?) { if copyStructured?(true) != true { super.cut(sender) } }
-        override func paste(_ sender: Any?) { if pasteStructured?() != true { super.paste(sender) } }
+        override func paste(_ sender: Any?) {
+            suppressSlash?(true)
+            defer { suppressSlash?(false) }
+            if pasteStructured?() != true { super.paste(sender) }
+        }
         func emptyQuoteBarDrawingRect() -> CGRect? {
             let selection = selectedRange()
             let source = string as NSString
@@ -1336,6 +1638,7 @@ struct NativeRichTextEditor {
         override func scrollWheel(with event: NSEvent) {
             if scrollCode(with: event) { return }
             super.scrollWheel(with: event)
+            refreshTables?()
         }
 
         override func cursorUpdate(with event: NSEvent) {
@@ -1445,6 +1748,7 @@ struct NativeRichTextEditor {
                 }
             }
             super.mouseDown(with: event)
+            selectionFinished?()
             resolveEmptyParagraphTypingAttributes()
         }
 
@@ -1515,7 +1819,15 @@ struct NativeRichTextEditor {
                     coordinator?.backspaceAtParagraphStart() ?? false
                 }
             #endif
-            view.refreshTables = { [weak coordinator = context.coordinator] in coordinator?.refreshTables() }
+            view.suppressSlash = { [weak coordinator = context.coordinator] value in coordinator?.suppressSlashTrigger = value }
+            #if os(macOS)
+                view.dismissControlMenus = { [weak coordinator = context.coordinator] in coordinator?.dismissRootControls() }
+                view.selectionFinished = { [weak coordinator = context.coordinator] in coordinator?.controlsAfterSelection() }
+            #endif
+            view.refreshTables = { [weak coordinator = context.coordinator] in
+                coordinator?.refreshTables()
+                coordinator?.refreshControlPosition()
+            }
             view.editLink = { [weak coordinator = context.coordinator] in coordinator?.parent.onEditLink() }
             view.toggleTask = { [weak coordinator = context.coordinator] index in coordinator?.toggleTask(at: index) ?? false }
             view.toggleEmptyTask = { [weak coordinator = context.coordinator] in coordinator?.toggleEmptyTask() ?? false }
@@ -1530,6 +1842,7 @@ struct NativeRichTextEditor {
             view.textContainer?.widthTracksTextView = true
             scroll.documentView = view
             view.isRichText = true
+            view.usesRolloverButtonForSelection = false
             view.allowsUndo = true
             view.isAutomaticQuoteSubstitutionEnabled = false
             view.isAutomaticDashSubstitutionEnabled = false
@@ -1539,6 +1852,12 @@ struct NativeRichTextEditor {
             view.textStorage?.setAttributedString(NativeTextAttributes.native(text, context: fontContext))
             view.delegate = context.coordinator
             context.coordinator.textView = view
+            commandBridge?.openLink = { [weak coordinator = context.coordinator] in coordinator?.presentControlDetail("link") }
+            commandBridge?.insertTable = { [weak coordinator = context.coordinator] in coordinator?.presentControlDetail("table") }
+            commandBridge?.perform = { [weak coordinator = context.coordinator] action in
+                guard let coordinator else { return }
+                coordinator.performControlAction(action, range: coordinator.currentSelection)
+            }
             context.coordinator.update(self)
             if focusWhenEmpty, text.characters.isEmpty {
                 DispatchQueue.main.async { [weak view] in view?.window?.makeFirstResponder(view) }
@@ -1547,13 +1866,20 @@ struct NativeRichTextEditor {
         }
 
         func updateNSView(_ nsView: NSScrollView, context: Context) { context.coordinator.update(self) }
+        static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) { coordinator.dismissControls() }
     }
 
     extension NativeRichTextEditor.Coordinator: NSTextViewDelegate {
+        func textDidEndEditing(_ notification: Notification) { dismissRootControls() }
+
         func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
             intercept(range: affectedCharRange, replacement: replacementString)
         }
         func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            let controlKeys = [
+                "moveUp:": "up", "moveDown:": "down", "insertNewline:": "return", "insertTab:": "tab", "cancelOperation:": "escape",
+            ]
+            if let key = controlKeys[NSStringFromSelector(selector)], handleControlKey(key) { return true }
             if selector == #selector(NSResponder.moveLeft(_:)) || selector == #selector(NSResponder.moveBackward(_:)) {
                 if moveLeftFromListStart() { return true }
             }
@@ -1589,15 +1915,18 @@ struct NativeRichTextEditor {
             let affected = pendingNativeEditRange
             pendingNativeEditRange = nil
             publish(around: affected)
+            controlsAfterTyping()
         }
         func textViewDidChangeSelection(_ notification: Notification) {
             (textView as? ReadingMacTextView)?.updateEmptyQuoteBar()
             publishSelection()
+            controlsAfterSelection()
         }
     }
 #else
     private final class ReadingTextView: UITextView, UIGestureRecognizerDelegate {
         private lazy var codePan = UIPanGestureRecognizer(target: self, action: #selector(scrollCodeHorizontally(_:)))
+        var suppressSlash: ((Bool) -> Void)?
         private var panningCodeID: String?
         private var panningCodeVertically = false
 
@@ -1637,9 +1966,21 @@ struct NativeRichTextEditor {
         var pasteStructured: (() -> Bool)?
         override func copy(_ sender: Any?) { if copyStructured?(false) != true { super.copy(sender) } }
         override func cut(_ sender: Any?) { if copyStructured?(true) != true { super.cut(sender) } }
-        override func paste(_ sender: Any?) { if pasteStructured?() != true { super.paste(sender) } }
+        override func paste(_ sender: Any?) {
+            suppressSlash?(true)
+            defer { suppressSlash?(false) }
+            if pasteStructured?() != true { super.paste(sender) }
+        }
+        var controlKey: ((String) -> Bool)?
         var moveLeftFromListStart: (() -> Bool)?
         override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+            if markedTextRange == nil, presses.count == 1, let key = presses.first?.key {
+                let keys: [UIKeyboardHIDUsage: String] = [
+                    .keyboardUpArrow: "up", .keyboardDownArrow: "down", .keyboardReturnOrEnter: "return", .keyboardEscape: "escape",
+                    .keyboardTab: "tab",
+                ]
+                if let name = keys[key.keyCode], controlKey?(name) == true { return }
+            }
             if markedTextRange == nil, presses.count == 1, let key = presses.first?.key,
                 key.keyCode == .keyboardUpArrow || key.keyCode == .keyboardDownArrow,
                 let layout = layoutManager as? CodeLayoutManager
@@ -1800,6 +2141,7 @@ struct NativeRichTextEditor {
             let view = ReadingTextView(frame: .zero, textContainer: container)
             layout.codeDisplayView = view
             view.installCodeScrolling()
+            view.controlKey = { [weak coordinator = context.coordinator] key in coordinator?.handleControlKey(key) ?? false }
             view.exitEmptyQuote = { [weak coordinator = context.coordinator] in coordinator?.exitEmptyQuote() ?? false }
             view.copyStructured = { [weak coordinator = context.coordinator] cut in coordinator?.copyStructured(cut: cut) ?? false }
             view.pasteStructured = { [weak coordinator = context.coordinator] in coordinator?.pasteStructured() ?? false }
@@ -1813,7 +2155,15 @@ struct NativeRichTextEditor {
                     coordinator?.backspaceAtParagraphStart() ?? false
                 }
             #endif
-            view.refreshTables = { [weak coordinator = context.coordinator] in coordinator?.refreshTables() }
+            view.suppressSlash = { [weak coordinator = context.coordinator] value in coordinator?.suppressSlashTrigger = value }
+            #if os(macOS)
+                view.dismissControlMenus = { [weak coordinator = context.coordinator] in coordinator?.dismissRootControls() }
+                view.selectionFinished = { [weak coordinator = context.coordinator] in coordinator?.controlsAfterSelection() }
+            #endif
+            view.refreshTables = { [weak coordinator = context.coordinator] in
+                coordinator?.refreshTables()
+                coordinator?.refreshControlPosition()
+            }
             view.toggleTask = { [weak coordinator = context.coordinator] index in coordinator?.toggleTask(at: index) ?? false }
             view.toggleEmptyTask = { [weak coordinator = context.coordinator] in coordinator?.toggleEmptyTask() ?? false }
             let tap = UITapGestureRecognizer(target: view, action: #selector(ReadingTextView.tappedTask(_:)))
@@ -1831,6 +2181,12 @@ struct NativeRichTextEditor {
             view.attributedText = NativeTextAttributes.native(text, context: fontContext)
             view.delegate = context.coordinator
             context.coordinator.textView = view
+            commandBridge?.openLink = { [weak coordinator = context.coordinator] in coordinator?.presentControlDetail("link") }
+            commandBridge?.insertTable = { [weak coordinator = context.coordinator] in coordinator?.presentControlDetail("table") }
+            commandBridge?.perform = { [weak coordinator = context.coordinator] action in
+                guard let coordinator else { return }
+                coordinator.performControlAction(action, range: coordinator.currentSelection)
+            }
             context.coordinator.update(self)
             if focusWhenEmpty, text.characters.isEmpty {
                 DispatchQueue.main.async { [weak view] in view?.becomeFirstResponder() }
@@ -1838,9 +2194,51 @@ struct NativeRichTextEditor {
             return view
         }
         func updateUIView(_ uiView: UITextView, context: Context) { context.coordinator.update(self) }
+        static func dismantleUIView(_ uiView: UITextView, coordinator: Coordinator) { coordinator.dismissControls() }
     }
 
     extension NativeRichTextEditor.Coordinator: UITextViewDelegate {
+        func textView(_ textView: UITextView, editMenuForTextInRanges ranges: [NSValue], suggestedActions: [UIMenuElement]) -> UIMenu? {
+            return formattingMenu(ranges: ranges, suggestedActions: suggestedActions)
+        }
+
+        func textView(_ textView: UITextView, editMenuForTextIn range: NSRange, suggestedActions: [UIMenuElement]) -> UIMenu? {
+            return formattingMenu(ranges: [NSValue(range: range)], suggestedActions: suggestedActions)
+        }
+
+        private func formattingMenu(ranges: [NSValue], suggestedActions: [UIMenuElement]) -> UIMenu {
+            guard ranges.count == 1, !hasMarkedText else { return UIMenu(children: suggestedActions) }
+            controlsAfterSelection()
+            let expectedRevision = revision
+            let range = ranges[0].rangeValue
+            let actions = controls.state.items.map { item in
+                UIAction(
+                    title: item.title, image: UIImage(systemName: item.symbol), attributes: item.enabled ? [] : .disabled,
+                    state: item.mixed ? .mixed : item.active ? .on : .off
+                ) { [weak self] _ in
+                    guard let self, self.revision == expectedRevision else { return }
+                    if item.id == "link" {
+                        self.presentControlDetail("link", range: range)
+                    } else {
+                        self.performControlAction(item.action, range: range)
+                    }
+                }
+            }
+            let formatting = UIMenu(title: L10n.string("format.menu"), identifier: .format, children: actions)
+            var replaced = false
+            func replacingSystemFormatting(_ element: UIMenuElement) -> UIMenuElement {
+                guard let menu = element as? UIMenu else { return element }
+                if menu.identifier == .format || menu.identifier == .textStyle {
+                    replaced = true
+                    return formatting
+                }
+                return menu.replacingChildren(menu.children.map(replacingSystemFormatting))
+            }
+            var children = suggestedActions.map(replacingSystemFormatting)
+            if !replaced { children.append(formatting) }
+            return UIMenu(children: children)
+        }
+
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
             return intercept(range: range, replacement: text)
         }
@@ -1853,10 +2251,12 @@ struct NativeRichTextEditor {
             let affected = pendingNativeEditRange
             pendingNativeEditRange = nil
             publish(around: affected)
+            controlsAfterTyping()
         }
         func textViewDidChangeSelection(_ textView: UITextView) {
             textView.setNeedsDisplay()
             publishSelection()
+            controlsAfterSelection()
         }
     }
 #endif

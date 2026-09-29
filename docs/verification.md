@@ -16,6 +16,16 @@
 - 移出、隐藏、删除、切换页面、Toast 自动消失或点击关闭后不残留手型；相邻控件之间移动保持正确。
 - 确认光标处理不拦截点击，不抢键盘焦点，不影响文本光标和选择。无法通过工具实际验证指针外观时，明确记录待人工验证，不写成已验收。
 
+## Slash 与选区格式回归
+
+`EditorCommandContractTests` 检查中文/英文别名、UTF-16 查询范围、普通路径与空白退出、已完成任务的幂等转换、完整代码范围、半开段落选区与清除文字格式后的存储语义。原生桥接测试补充组合输入保护、撤销/重做与后续输入；输入法标记测试不等于真实候选窗口实测。
+
+UI 回归使用独立 bundle ID 与 Debug 隔离 UUID 存储，不终止其他工作区的用户实例。Mac 检查：输入 `/h2` → 转换 → 撤销/重做 → 输入标题与下一段 → 重启恢复；Esc 保留查询，无结果 Return 正常换段；选区点击加粗后继续输入替换原选区；链接取消、应用、重新打开与替换选区。移动端检查 slash 触控选择及后续输入；系统选区菜单、链接面板、软键盘/硬件键盘切换分别复核。
+
+人工补充：真实中文输入法组合与候选回车、跨行反向拖选、滚动中浮层定位、长文与窄窗、列表缩进、表格尺寸与退出、浅深色、VoiceOver、减少透明度和完整点击热区的手型。程序选区恢复不应抢焦点；切换记录或编辑导致目标过期时不能改写新目标。
+
+本段是可复用验收方法，具体通过项以当前任务的测试日志和交互证据为准，不将构建通过或静态截图当作全部交互通过。
+
 ## 自动检查
 
 App 图标修改：运行 `python3 scripts/generate_app_icons.py` 与 `--check`，确认主 SVG 与 `.icon` 图层同步；预览 `.build/app-icons/preview.html` 中浅深色、Clear / Tinted 和缩小图。随后构建 Mac / iOS target，检查产物 Info.plist 的 `AppIcon` 引用、Mac 的 `AppIcon.icns`、iPhone/iPad 的图标记录与 Assets.car 内各外观的图标栈。当前矢量版已通过两平台构建及资源检查，原生导出图已查看。Mac 已启动使用独立 bundle identifier 和沙箱的本地图标预览，在“关于 Yours”中确认新图标实际加载且三角形与水滴可辨；原有工作区实例保留。Dock 截图读取超时，Dock / 主屏幕、不同壁纸、真机和系统着色设置尚待实测。
@@ -84,7 +94,7 @@ python3 scripts/check_coverage.py "$(swift test --show-codecov-path)"
 python3 -m unittest discover -s scripts -p 'test_*.py'
 ```
 
-行覆盖率下限在 `scripts/check_coverage.py` 集中定义：核心逻辑 90%、原生桥接 55%、全源码 35%。UI 组包含 App 入口、AppSettingsView、WorkspaceView、MacWorkspaceView、MobileWorkspaceView 、NativeTableView 和 Toast；ToastPresenter 仍归入核心逻辑组。桥接组包含 NativeRichTextEditor、NativeTextAttributes、NativeTableOverlay 与 NativeRecordGallery。核心包含除这两组以外的全部 Swift 文件，新增文件默认纳入；当前平台编译的全部文件均计入全源码。报告缺失、源码缺项、重复条目或非法计数直接失败。门槛基于起步实测，不能把全源码 35% 描述成全项目 90%；后续扩大测试后应提高门槛，不因失败自动降低。
+行覆盖率下限在 `scripts/check_coverage.py` 集中定义：核心逻辑 90%、原生桥接 55%、全源码 35%。UI 组包含 App 入口、AppSettingsView、WorkspaceView、MacWorkspaceView、MobileWorkspaceView、NativeTableView、NativeEditorControls 和 Toast；ToastPresenter 仍归入核心逻辑组。桥接组包含 NativeRichTextEditor、NativeTextAttributes、NativeTableOverlay 与 NativeRecordGallery。核心包含除这两组以外的全部 Swift 文件，新增文件默认纳入；当前平台编译的全部文件均计入全源码。报告缺失、源码缺项、重复条目或非法计数直接失败。门槛基于起步实测，不能把全源码 35% 描述成全项目 90%；后续扩大测试后应提高门槛，不因失败自动降低。
 
 Package 单测运行在 Mac，覆盖率脚本默认 `--platform macos`：明确列出且排除整个文件受 `#if os(iOS)` 包裹的 `App/MobileWorkspaceView.swift`；`--platform ios` 对应排除 Mac 专属工作区文件。平台专属映射以完整相对路径列举，其他新增文件仍须有报告。移动端工作区行为由 iOS UI 测试验证，不能将 Mac 单测覆盖率当作它的覆盖率。
 
@@ -251,7 +261,7 @@ Mac 历史导航：检查首次启动前后退均禁用；首页 → 文档 Inbo
 
 `TitleTypographyTests` 核对包内七档字重注册、PostScript 名称、中文/拉丁字形覆盖、原始许可证和卡片语义字号；`RecordGalleryPerformanceTests` 使用同一标题字体检查测量缓存与布局。测试不代替真实 App 的中英混排、输入法、动态字号及浅深色视觉验收。
 
-`BodyTypographyTests` 覆盖 H1–H6 的 SemiBold/显式 Bold、其他非代码角色与粗斜体组合的多次 native/rich 往返、磁盘编码不含显示字体/临时属性、代码等宽、自定义字体保持、表头真实 Bold，以及旧系统中文 UI 回退字体和独立强调标志的显示/还原。原生输入用例覆盖空文档输入、快捷格式撤销重做后继续输入及字体恢复；回归时检查空段、组合输入、选区和重启恢复，不能仅凭注册成功断言编辑正确。字体族改变会影响自然字形度量，正文/标题折行和表格高度须在真实 App 复核。
+`BodyTypographyTests` 覆盖 H1–H6 的 Medium/显式 Heavy、其他非代码角色的 Light/Bold 与粗斜体组合的多次 native/rich 往返、磁盘编码不含显示字体/临时属性、代码等宽、自定义字体保持、表头真实 Bold，以及旧系统中文 UI 回退字体和独立强调标志的显示/还原。原生输入用例覆盖空文档输入、快捷格式撤销重做后继续输入及字体恢复；回归时检查空段、组合输入、选区和重启恢复，不能仅凭注册成功断言编辑正确。字体族改变会影响自然字形度量，正文/标题折行和表格高度须在真实 App 复核。
 
 Mac 正文思源宋体验收：在隔离测试实例中打开改动前保存的中英混排笔记，检查正文、引用、列表、表格及粗斜体显示，代码保持等宽；末尾输入、撤销、重做及继续输入后正常退出重启，内容和显示恢复。仅打开旧笔记未改写保存数据；编辑保存不含显示字体名称或临时字体属性，另一条笔记保持不变。256 项测试、严格格式检查及 Mac/iOS Simulator target 构建通过。移动端实际交互、中文组合输入、VoiceOver 和本次字体在全部外观/动态字号下的表现尚未实机验收。
 
@@ -260,3 +270,7 @@ Mac 正文思源宋体验收：在隔离测试实例中打开改动前保存的�
 _Last updated: 2026-09-28 — 补齐七档字重及场景映射验收。_
 
 默认文档文字色验证：258 项测试与 Mac/iOS 构建通过，覆盖浅深色解析、注入增加对比度分支、默认颜色不持久化以及红色/黑色/深灰自定义颜色往返。Mac 隔离实例实际切换浅色→深色→浅色，标题、正文、引用和表格保持可读，保存的笔记内容不变。系统增加对比度开关、移动端与 VoiceOver 尚未实机验收；注入分支测试不等同于辅助功能实测。
+
+_Last updated: 2026-09-28 — 补充 Slash 与选区格式入口、共享事务和验证边界。Evidence: `EditorCommands.swift`, `NativeRichTextEditor.swift`, `EditorCommandContractTests.swift`, `NativeCommandTests.swift`._
+
+空标题首字回归：在文档首段和已有正文后的末尾空段，分别通过 Slash 切换 H1–H6，核对输入首字前后的插入点纵坐标与段前距一致。空标题必须按实际段落位置预留段前距；覆盖恢复输入属性后再次输入，避免首字出现时下移。自动化见 `NativeInputTests.emptyHeadingGeometryMatchesFirstCharacter`。

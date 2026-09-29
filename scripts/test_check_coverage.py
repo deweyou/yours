@@ -74,6 +74,18 @@ class CoverageGateTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             evaluate(self.report(), self.root)
 
+    def test_editor_controls_are_ui_but_commands_keep_core_gate(self):
+        for name, count, covered in [("NativeEditorControls.swift", 10, 0), ("EditorCommands.swift", 100, 100)]:
+            path = self.root / name
+            path.touch()
+            self.entries.append({"filename": str(path), "summary": {"lines": {"count": count, "covered": covered}}})
+        self.assertTrue(evaluate(self.report(), self.root)[0])
+        self.entries[-1]["summary"]["lines"]["covered"] = 0
+        self.assertFalse(evaluate(self.report(), self.root)[0])
+        self.entries[-1]["summary"]["lines"]["covered"] = 100
+        self.entries[-2]["summary"]["lines"]["count"] = 1000
+        self.assertFalse(evaluate(self.report(), self.root)[0])
+
     def test_rejects_invalid_counts(self):
         self.entries[0]["summary"]["lines"]["covered"] = 101
         with self.assertRaises(ValueError):

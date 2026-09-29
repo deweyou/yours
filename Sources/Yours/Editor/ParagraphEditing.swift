@@ -195,7 +195,6 @@ enum ParagraphEditing {
         guard !isEmptyEnd, let range = paragraphRange(in: text, selection: selection) else {
             var attributes = selection.typingAttributes(in: text)
             attributes[TableAttribute.self] = nil
-            attributes[CodeLanguageAttribute.self] = nil
             if style == "quote" {
                 attributes[QuoteAttribute.self] = true
                 let role = attributes[ParagraphStyleAttribute.self] ?? "body"
@@ -205,6 +204,8 @@ enum ParagraphEditing {
                 selection = AttributedTextSelection(insertionPoint: text.endIndex, typingAttributes: attributes)
                 return
             }
+            if attributes[ParagraphStyleAttribute.self] == style { return }
+            attributes[CodeLanguageAttribute.self] = nil
             let emphasis = DocumentTypography.emphasis(in: attributes, context: context)
             attributes[ParagraphStyleAttribute.self] = style
             attributes[InlineEmphasisAttribute.self] = emphasis
@@ -253,6 +254,9 @@ enum ParagraphEditing {
         }
         let blockID = style == "code" ? "block:" + UUID().uuidString : nil
         for run in Array(content.runs) {
+            // Setting an existing role must preserve task completion and code identity.
+            if run[ParagraphStyleAttribute.self] == style { continue }
+            content[run.range][TaskStateAttribute.self] = style == "task" ? false : nil
             let emphasis = DocumentTypography.emphasis(in: run.attributes, context: context)
             let inlineCode = run[CodeStyleAttribute.self] == "inline" && style != "code"
             content[run.range][ParagraphStyleAttribute.self] = style
@@ -263,7 +267,6 @@ enum ParagraphEditing {
         }
         if !content.characters.isEmpty {
             let whole = content.startIndex..<content.endIndex
-            content[whole][TaskStateAttribute.self] = style == "task" ? false : nil
             content[whole][ListMarkerAttribute.self] = nil
             let plain = String(content.characters) as NSString
             var offset = 0

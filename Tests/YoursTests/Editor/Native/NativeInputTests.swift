@@ -300,6 +300,38 @@
             #expect(abs(emptyMarker.minY - filledMarker.minY) < 0.01)
         }
 
+        @Test(arguments: 1...6, ["", "正文\n"])
+        func emptyHeadingGeometryMatchesFirstCharacter(level: Int, prefix: String) throws {
+            let (original, coordinator) = editor(AttributedString(prefix + "/h"))
+            let storage = NSTextStorage(attributedString: original.textStorage!)
+            let layout = CodeLayoutManager()
+            let container = NSTextContainer(size: CGSize(width: 500, height: 10_000))
+            storage.addLayoutManager(layout)
+            layout.addTextContainer(container)
+            let view = ReadingMacTextView(frame: CGRect(x: 0, y: 0, width: 500, height: 300), textContainer: container)
+            let window = NSWindow(contentRect: view.frame, styleMask: .borderless, backing: .buffered, defer: false)
+            window.contentView = view
+            defer { window.orderOut(nil) }
+            coordinator.textView = view
+            view.delegate = coordinator
+            coordinator.update(coordinator.parent)
+            let start = prefix.utf16.count
+            coordinator.performControlAction(
+                .paragraph("heading:\(level)"), range: NSRange(location: start + 2, length: 0),
+                slash: NSRange(location: start, length: 2))
+            coordinator.update(coordinator.parent)
+            layout.ensureLayout(for: container)
+            let emptyCaret = view.firstRect(forCharacterRange: NSRange(location: start, length: 0), actualRange: nil)
+            let before = try #require(view.typingAttributes[.paragraphStyle] as? NSParagraphStyle)
+            view.insertText("1", replacementRange: view.selectedRange())
+            coordinator.update(coordinator.parent)
+            layout.ensureLayout(for: container)
+            let filledCaret = view.firstRect(forCharacterRange: NSRange(location: start, length: 0), actualRange: nil)
+            let after = try #require(storage.attribute(.paragraphStyle, at: start, effectiveRange: nil) as? NSParagraphStyle)
+            #expect(before.paragraphSpacingBefore == after.paragraphSpacingBefore)
+            #expect(abs(emptyCaret.minY - filledCaret.minY) < 0.5)
+        }
+
         @Test(arguments: ["- 第一项", "1. 第一项"])
         func continuedEmptyListKeepsMarkerWhenIndented(markdown: String) throws {
             let (original, coordinator) = editor(MarkdownFormatting.render(markdown))
@@ -655,7 +687,7 @@
             let context = EnvironmentValues().fontResolutionContext
             let tail = "中文🌿".utf16.count
             let display = try #require(view.textStorage?.attribute(.font, at: tail, effectiveRange: nil) as? NSFont)
-            #expect(display.fontName == BundledSerifFont.regularName)
+            #expect(display.fontName == BundledSerifFont.lightName)
             let restored = NativeTextAttributes.rich(try #require(view.textStorage))
             let range = try #require(restored.range(of: "后文"))
             let stored = try #require(restored[range].font).resolve(in: context)
@@ -670,7 +702,7 @@
             view.delegate = coordinator
             coordinator.update(coordinator.parent)
             let font = try #require(view.typingAttributes[.font] as? NSFont)
-            #expect(font.fontName == BundledSerifFont.regularName)
+            #expect(font.fontName == BundledSerifFont.lightName)
             view.insertText("中文🌿", replacementRange: view.selectedRange())
             let rich = NativeTextAttributes.rich(try #require(view.textStorage))
             let context = EnvironmentValues().fontResolutionContext

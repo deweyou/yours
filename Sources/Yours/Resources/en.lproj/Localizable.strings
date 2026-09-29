@@ -170,3 +170,20 @@
 "navigation.back" = "Back";
 
 "navigation.forward" = "Forward";
+
+"editor.category.text" = "Text";
+"editor.category.lists" = "Lists";
+"editor.category.blocks" = "Blocks";
+"editor.no_results" = "No matching commands";
+"editor.mixed" = "Mixed";
+"editor.enabled" = "Enabled";
+"editor.more" = "More formatting";
+"editor.rows" = "Rows";
+"editor.columns" = "Columns";
+"common.apply" = "Apply";
+"editor.heading.level1" = "Heading 1";
+"editor.heading.level2" = "Heading 2";
+"editor.heading.level3" = "Heading 3";
+"editor.heading.level4" = "Heading 4";
+"editor.heading.level5" = "Heading 5";
+"editor.heading.level6" = "Heading 6";
