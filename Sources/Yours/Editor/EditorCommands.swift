@@ -51,7 +51,7 @@ enum EditorCommandCatalog {
                 id: "quote", titleKey: "format.quote", symbol: "text.quote", category: "editor.category.blocks", aliases: "quote 引用",
                 action: .quote),
             .init(
-                id: "code", titleKey: "format.code_block", symbol: "chevron.left.forwardslash.chevron.right",
+                id: "code", titleKey: "format.code_block", symbol: "curlybraces.square",
                 category: "editor.category.blocks", aliases: "code codeblock 代码", action: .paragraph("code")),
             .init(
                 id: "table", titleKey: "table.insert", symbol: "tablecells", category: "editor.category.blocks", aliases: "table 表格",
@@ -169,7 +169,7 @@ enum EditorCommandEditing {
         default:
             let attributes = Array(selection.attributes(in: text))
             let remove = !attributes.isEmpty && attributes.allSatisfy { isActive(action, attributes: $0, context: context) }
-            text.transformAttributes(in: &selection) { value in
+            func update(_ value: inout AttributeContainer) {
                 switch action {
                 case .emphasis(let flag): DocumentTypography.setEmphasis(flag, enabled: !remove, in: &value, context: context)
                 case .underline: value.underlineStyle = remove ? nil : .single
@@ -190,6 +190,24 @@ enum EditorCommandEditing {
                 value.font = DocumentTypography.font(
                     for: value[ParagraphStyleAttribute.self] ?? "body", emphasis: DocumentTypography.emphasis(in: value, context: context),
                     inlineCode: value[CodeStyleAttribute.self] == "inline", context: context)
+            }
+            switch selection.indices(in: text) {
+            case .insertionPoint:
+                text.transformAttributes(in: &selection, body: update)
+            case .ranges(let ranges):
+                let selectedOffsets = ranges.ranges.map { NSRange($0, in: text) }
+                // Transform each original run, preserving attributes that differ within the selection.
+                // Applying the selection's common attributes would erase unrelated inline formatting.
+                let runs = ranges.ranges.flatMap { range in
+                    text[range].runs.map { (range: $0.range, attributes: $0.attributes) }
+                }
+                for run in runs {
+                    var attributes = run.attributes
+                    update(&attributes)
+                    text[run.range].setAttributes(attributes)
+                }
+                selection = AttributedTextSelection(
+                    ranges: RangeSet(selectedOffsets.compactMap { Range<AttributedString.Index>($0, in: text) }))
             }
         }
     }

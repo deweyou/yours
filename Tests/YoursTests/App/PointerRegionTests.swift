@@ -21,19 +21,22 @@
                     with: .mouseMoved, location: point, modifierFlags: [], timestamp: 0,
                     windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
             defer { NSCursor.arrow.set() }
-            #expect(PointingHandRegionView.contains(point, in: window))
+            #expect(PointingHandRegionView.cursor(at: point, in: window) == .pointingHand)
             #expect(region.hitTest(NSPoint(x: 5, y: 5)) == nil)
             NSCursor.arrow.set()
             editor.cursorUpdate(with: event)
             #expect(NSCursor.current == .pointingHand)
             editor.mouseMoved(with: event)
             #expect(NSCursor.current == .pointingHand)
+            region.cursor = .operationNotAllowed
+            editor.cursorUpdate(with: event)
+            #expect(NSCursor.current == .operationNotAllowed)
             region.isHidden = true
             editor.cursorUpdate(with: event)
             #expect(NSCursor.current == .iBeam)
             region.isHidden = false
             region.removeFromSuperview()
-            #expect(!PointingHandRegionView.contains(point, in: window))
+            #expect(PointingHandRegionView.cursor(at: point, in: window) == nil)
             editor.cursorUpdate(with: event)
             #expect(NSCursor.current == .iBeam)
         }

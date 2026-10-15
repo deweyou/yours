@@ -6,6 +6,104 @@
 
     @MainActor
     struct NativeInputTests {
+        @Test(arguments: [false, true]) func codeStartTypingSurvivesSelectionBindingUpdates(composing: Bool) throws {
+            var text = MarkdownFormatting.render("打yy`撒`大叔大")
+            var selection = AttributedTextSelection(insertionPoint: text.startIndex)
+            let editor = NativeRichTextEditor(
+                text: Binding(get: { text }, set: { text = $0 }),
+                selection: Binding(get: { selection }, set: { selection = $0 }))
+            let coordinator = editor.makeCoordinator()
+            let view = ReadingMacTextView(frame: CGRect(x: 0, y: 0, width: 500, height: 200))
+            view.textContainer?.replaceLayoutManager(CodeLayoutManager())
+            let storage = try #require(view.textStorage)
+            storage.setAttributedString(NativeTextAttributes.native(text, context: EnvironmentValues().fontResolutionContext))
+            coordinator.textView = view
+            view.delegate = coordinator
+            view.didResolveTypingAttributes = {
+                coordinator.textViewDidChangeSelection(Notification(name: NSTextView.didChangeSelectionNotification, object: view))
+            }
+            let layout = try #require(view.layoutManager as? CodeLayoutManager)
+            let container = try #require(view.textContainer)
+            let range = (view.string as NSString).range(of: "撒")
+            view.setSelectedRange(NSRange(location: range.location, length: 0))
+            coordinator.update(editor)
+            layout.ensureLayout(for: container)
+            let surface = try #require(
+                layout.inlineCodeBackgroundRects(
+                    forGlyphRange: layout.glyphRange(
+                        forCharacterRange: range,
+                        actualCharacterRange: nil), in: container
+                ).first)
+            view.resolveInlineCodeTypingAttributes(at: CGPoint(x: surface.minX + 2, y: surface.midY))
+            coordinator.update(editor)
+            #expect(view.typingAttributes[.yoursCodeStyle] as? String == "inline")
+            // AppKit may resolve the leading boundary from the preceding body run
+            // again between mouse selection and the text input client callback.
+            view.typingAttributes = storage.attributes(at: 0, effectiveRange: nil)
+            for index in 0..<3 {
+                if composing && index == 0 {
+                    view.setMarkedText("1", selectedRange: NSRange(location: 1, length: 0), replacementRange: view.selectedRange())
+                    #expect(view.typingAttributes[.yoursCodeStyle] as? String == "inline")
+                }
+                view.insertText("1", replacementRange: view.hasMarkedText() ? view.markedRange() : view.selectedRange())
+                coordinator.update(editor)
+            }
+            let inserted = (view.string as NSString).range(of: "111")
+            #expect(inserted.length == 3)
+            storage.enumerateAttribute(.yoursCodeStyle, in: inserted) { value, _, _ in
+                #expect(value as? String == "inline")
+            }
+        }
+
+        @Test(arguments: [false, true], [false, true])
+        func typingPreservesInlineBoundarySide(inside: Bool, composing: Bool) throws {
+            var text = MarkdownFormatting.render("前`撒`后")
+            var selection = AttributedTextSelection(insertionPoint: text.startIndex)
+            let editor = NativeRichTextEditor(
+                text: Binding(get: { text }, set: { text = $0 }),
+                selection: Binding(get: { selection }, set: { selection = $0 }))
+            let coordinator = editor.makeCoordinator()
+            let view = ReadingMacTextView(frame: CGRect(x: 0, y: 0, width: 500, height: 200))
+            view.textContainer?.replaceLayoutManager(CodeLayoutManager())
+            let storage = try #require(view.textStorage)
+            storage.setAttributedString(NativeTextAttributes.native(text, context: EnvironmentValues().fontResolutionContext))
+            coordinator.textView = view
+            view.delegate = coordinator
+            view.didResolveTypingAttributes = {
+                coordinator.textViewDidChangeSelection(Notification(name: NSTextView.didChangeSelectionNotification, object: view))
+            }
+            coordinator.update(editor)
+            view.setSelectedRange(NSRange(location: inside ? 2 : 1, length: 0))
+            #expect(view.setInlineCodeBoundary(inside: inside))
+            for _ in 0..<2 {
+                if composing {
+                    for syllable in ["zh", "zhong"] {
+                        view.setMarkedText(
+                            syllable, selectedRange: NSRange(location: syllable.utf16.count, length: 0),
+                            replacementRange: view.hasMarkedText() ? view.markedRange() : view.selectedRange())
+                        let marked = view.markedRange()
+                        #expect(marked.length == syllable.utf16.count)
+                        if !inside {
+                            // Only the last marked character touches the code surface;
+                            // no generated gap may remain before the composing text.
+                            let preceding = marked.location - 1
+                            #expect(storage.attribute(.yoursInlineSpacing, at: preceding, effectiveRange: nil) == nil)
+                            #expect(storage.attribute(.yoursInlineSpacing, at: NSMaxRange(marked) - 1, effectiveRange: nil) != nil)
+                        }
+                    }
+                }
+                view.insertText("中", replacementRange: view.hasMarkedText() ? view.markedRange() : view.selectedRange())
+                coordinator.update(editor)
+                #expect(view.inlineCodeBoundary?.inside == inside)
+                #expect((view.typingAttributes[.yoursCodeStyle] as? String == "inline") == inside)
+            }
+            #expect(view.string == (inside ? "前撒中中后" : "前中中撒后"))
+            let inserted = (view.string as NSString).range(of: "中中")
+            storage.enumerateAttribute(.yoursCodeStyle, in: inserted) { value, _, _ in
+                #expect((value as? String == "inline") == inside)
+            }
+        }
+
         @Test func backspaceOnEmptyFirstHeadingReturnsToBody() {
             let (view, coordinator) = editor(MarkdownFormatting.render("# 标题"))
             view.delegate = coordinator

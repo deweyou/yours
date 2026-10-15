@@ -26,6 +26,8 @@ UI 回归使用独立 bundle ID 与 Debug 隔离 UUID 存储，不终止其他�
 
 本段是可复用验收方法，具体通过项以当前任务的测试日志和交互证据为准，不将构建通过或静态截图当作全部交互通过。
 
+行内代码选区需验证实际填充：`ReadingLayoutTests.nativeSelectionFillExcludesCodeSurfacePadding` 通过原生 `drawBackground` 渲染位图，比较选择前后的像素，确认文字区域出现高亮、代码末尾留白不出现高亮，覆盖非零文本容器 inset。仅检查 `enumerateEnclosingRects` 返回值不能证明 AppKit 的实际选区高亮正确；仍需在 App 中检查激活与失焦选区、跨行拖选及代码边界点击。
+
 ## 自动检查
 
 App 图标修改：运行 `python3 scripts/generate_app_icons.py` 与 `--check`，确认主 SVG 与 `.icon` 图层同步；预览 `.build/app-icons/preview.html` 中浅深色、Clear / Tinted 和缩小图。随后构建 Mac / iOS target，检查产物 Info.plist 的 `AppIcon` 引用、Mac 的 `AppIcon.icns`、iPhone/iPad 的图标记录与 Assets.car 内各外观的图标栈。当前矢量版已通过两平台构建及资源检查，原生导出图已查看。Mac 已启动使用独立 bundle identifier 和沙箱的本地图标预览，在“关于 Yours”中确认新图标实际加载且三角形与水滴可辨；原有工作区实例保留。Dock 截图读取超时，Dock / 主屏幕、不同壁纸、真机和系统着色设置尚待实测。

@@ -653,9 +653,10 @@ final class CodeLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
             let foreground =
                 attrs[.foregroundColor] as? NSColor
                 ?? storage.attribute(.foregroundColor, at: charIndex, effectiveRange: nil) as? NSColor ?? .labelColor
-            let underline = attrs[.underlineColor] as? NSColor ?? .secondaryLabelColor
-            result[.foregroundColor] = foreground.blended(withFraction: transition.value, of: AppTheme.nativeAccent) ?? foreground
-            result[.underlineColor] = underline.blended(withFraction: transition.value, of: AppTheme.nativeAccent) ?? underline
+            let underline = attrs[.underlineColor] as? NSColor ?? AppTheme.nativeAccent
+            let hoverColor = AppTheme.nativeAccent.blended(withFraction: 0.15, of: .black) ?? AppTheme.nativeAccent
+            result[.foregroundColor] = foreground.blended(withFraction: transition.value, of: hoverColor) ?? foreground
+            result[.underlineColor] = underline.blended(withFraction: transition.value, of: hoverColor) ?? underline
             result[.underlineStyle] = NSUnderlineStyle.single.rawValue
             return result
         }
@@ -1058,6 +1059,223 @@ final class CodeLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         drawNativeText(for: glyphsToShow, at: origin, background: true)
     }
 
+    private func generatedInlineSpacing(at character: Int) -> CGFloat {
+        guard let storage = textStorage, character >= 0, character < storage.length,
+            let original = storage.attribute(.yoursInlineSpacing, at: character, effectiveRange: nil) as? CGFloat
+        else { return 0 }
+        return max(0, (storage.attribute(.kern, at: character, effectiveRange: nil) as? CGFloat ?? original) - original)
+    }
+
+    #if os(macOS)
+        override func fillBackgroundRectArray(
+            _ rectArray: UnsafePointer<NSRect>, count rectCount: Int,
+            forCharacterRange charRange: NSRange, color: NSColor
+        ) {
+            // AppKit paints native selection through this primitive, bypassing
+            // enumerateEnclosingRects. Apply the same boundary before the fill.
+            guard let storage = textStorage, let container = textContainers.first,
+                let view = container.textView, charRange.length > 0
+            else {
+                super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
+                return
+            }
+            let (selected, origin, selectedColor) = MainActor.assumeIsolated {
+                (view.selectedRange(), view.textContainerOrigin, view.selectedTextAttributes[.backgroundColor] as? NSColor)
+            }
+            guard selected.length > 0, NSMaxRange(selected) <= storage.length,
+                NSMaxRange(charRange) == NSMaxRange(selected),
+                color == selectedColor || color == NSColor.unemphasizedSelectedTextBackgroundColor
+            else {
+                super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
+                return
+            }
+            let last = (storage.string as NSString).rangeOfComposedCharacterSequence(at: NSMaxRange(selected) - 1)
+            let gap = generatedInlineSpacing(at: last.location)
+            guard gap > 0 else {
+                super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
+                return
+            }
+            var trailing = CGRect.zero
+            super.enumerateEnclosingRects(
+                forGlyphRange: glyphRange(forCharacterRange: last, actualCharacterRange: nil),
+                withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0), in: container
+            ) { rect, _ in
+                trailing = rect.offsetBy(dx: origin.x, dy: origin.y)
+            }
+            var rects = Array(UnsafeBufferPointer(start: rectArray, count: rectCount))
+            for index in rects.indices {
+                let rect = rects[index]
+                if rect.minY < trailing.maxY, rect.maxY > trailing.minY,
+                    rect.maxX > trailing.maxX - gap, rect.maxX <= trailing.maxX + 1
+                {
+                    rects[index].size.width = max(0, trailing.maxX - gap - rect.minX)
+                }
+            }
+            rects.withUnsafeBufferPointer { buffer in
+                guard let base = buffer.baseAddress else { return }
+                super.fillBackgroundRectArray(base, count: rectCount, forCharacterRange: charRange, color: color)
+            }
+        }
+    #endif
+
+    // Layout reserves the code surface's padding, but selection geometry ends at
+    // the character advance. Interior gaps remain selected when spanning a boundary.
+    override func enumerateEnclosingRects(
+        forGlyphRange glyphRange: NSRange, withinSelectedGlyphRange selectedRange: NSRange,
+        in textContainer: NSTextContainer, using block: @escaping (CGRect, UnsafeMutablePointer<ObjCBool>) -> Void
+    ) {
+        guard selectedRange.location != NSNotFound, selectedRange.length > 0,
+            let storage = textStorage, NSMaxRange(selectedRange) <= numberOfGlyphs
+        else {
+            super.enumerateEnclosingRects(
+                forGlyphRange: glyphRange, withinSelectedGlyphRange: selectedRange,
+                in: textContainer, using: block)
+            return
+        }
+        let characters = characterRange(forGlyphRange: selectedRange, actualGlyphRange: nil)
+        let last = (storage.string as NSString).rangeOfComposedCharacterSequence(at: NSMaxRange(characters) - 1).location
+        let gap = generatedInlineSpacing(at: last)
+        let glyph = glyphIndexForCharacter(at: last)
+        var trailingRect = CGRect.zero
+        super.enumerateEnclosingRects(
+            forGlyphRange: NSRange(location: glyph, length: 1),
+            withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0), in: textContainer
+        ) { rect, _ in
+            trailingRect = rect
+        }
+        super.enumerateEnclosingRects(
+            forGlyphRange: glyphRange, withinSelectedGlyphRange: selectedRange,
+            in: textContainer
+        ) { rect, stop in
+            var selection = rect
+            if gap > 0, rect.minY < trailingRect.maxY, rect.maxY > trailingRect.minY, abs(rect.maxX - trailingRect.maxX) < 0.5 {
+                selection.size.width = max(0, selection.width - gap)
+            }
+            block(selection, stop)
+        }
+    }
+
+    override func characterIndex(
+        for point: CGPoint, in container: NSTextContainer,
+        fractionOfDistanceBetweenInsertionPoints partialFraction: UnsafeMutablePointer<CGFloat>?
+    ) -> Int {
+        let index = super.characterIndex(for: point, in: container, fractionOfDistanceBetweenInsertionPoints: partialFraction)
+        guard let storage = textStorage, index < storage.length else { return index }
+        let character = (storage.string as NSString).rangeOfComposedCharacterSequence(at: index)
+        let gap = generatedInlineSpacing(at: character.location)
+        guard gap > 0 else { return index }
+        let glyphs = glyphRange(forCharacterRange: character, actualCharacterRange: nil)
+        var inSpacing = false
+        super.enumerateEnclosingRects(
+            forGlyphRange: glyphs,
+            withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0), in: container
+        ) { rect, _ in
+            if point.y >= rect.minY, point.y <= rect.maxY, point.x >= rect.maxX - gap, point.x <= rect.maxX {
+                inSpacing = true
+            }
+        }
+        guard inSpacing else { return index }
+        partialFraction?.pointee = 0
+        return NSMaxRange(character)
+    }
+
+    override func getLineFragmentInsertionPoints(
+        forCharacterAt charIndex: Int, alternatePositions aFlag: Bool, inDisplayOrder dFlag: Bool,
+        positions: UnsafeMutablePointer<CGFloat>?, characterIndexes: UnsafeMutablePointer<Int>?
+    ) -> Int {
+        let count = super.getLineFragmentInsertionPoints(
+            forCharacterAt: charIndex, alternatePositions: aFlag,
+            inDisplayOrder: dFlag, positions: positions, characterIndexes: characterIndexes)
+        guard let positions, let storage = textStorage, count > 0 else { return count }
+        var indexes = [Int](repeating: 0, count: count)
+        if let characterIndexes {
+            for index in 0..<count { indexes[index] = characterIndexes[index] }
+        } else {
+            _ = super.getLineFragmentInsertionPoints(
+                forCharacterAt: charIndex, alternatePositions: aFlag,
+                inDisplayOrder: dFlag, positions: nil, characterIndexes: &indexes)
+        }
+        #if os(macOS)
+            if let view = textContainers.first?.textView as? ReadingMacTextView {
+                let boundary = MainActor.assumeIsolated { () -> (Int, CGPoint)? in
+                    guard let state = view.inlineCodeBoundary, let point = view.inlineCodeBoundaryPoint() else { return nil }
+                    return (state.index, point)
+                }
+                if let (character, point) = boundary {
+                    let glyph = glyphIndexForCharacter(at: min(charIndex, max(0, storage.length - 1)))
+                    let line = lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+                    for index in 0..<count where indexes[index] == character { positions[index] = point.x - line.minX }
+                }
+            }
+        #endif
+        return count
+    }
+
+    private func drawInlineDecoration(for glyphs: NSRange, origin: CGPoint, draw: () -> Void) {
+        guard glyphs.length > 0, let storage = textStorage,
+            let container = textContainer(forGlyphAt: glyphs.location, effectiveRange: nil)
+        else {
+            draw()
+            return
+        }
+        let characters = characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        var clips: [CGRect] = []
+        var hasSpacing = false
+        storage.enumerateAttribute(.yoursInlineSpacing, in: characters) { original, range, _ in
+            var parts = [range]
+            if original != nil {
+                hasSpacing = true
+                parts = []
+                (storage.string as NSString).enumerateSubstrings(in: range, options: .byComposedCharacterSequences) { _, part, _, _ in
+                    parts.append(part)
+                }
+            }
+            for part in parts {
+                let partGlyphs = self.glyphRange(forCharacterRange: part, actualCharacterRange: nil)
+                super.enumerateEnclosingRects(
+                    forGlyphRange: partGlyphs,
+                    withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0), in: container
+                ) { rect, _ in
+                    let gap = self.generatedInlineSpacing(at: part.location)
+                    clips.append(
+                        CGRect(
+                            x: rect.minX + origin.x, y: rect.minY + origin.y - rect.height,
+                            width: max(0, rect.width - gap), height: rect.height * 3))
+                }
+            }
+        }
+        guard hasSpacing else {
+            draw()
+            return
+        }
+        #if os(macOS)
+            let context = NSGraphicsContext.current?.cgContext
+        #else
+            let context = UIGraphicsGetCurrentContext()
+        #endif
+        guard let context else {
+            draw()
+            return
+        }
+        context.saveGState()
+        context.clip(to: clips)
+        draw()
+        context.restoreGState()
+    }
+
+    override func drawStrikethrough(
+        forGlyphRange glyphRange: NSRange, strikethroughType strikethroughVal: NSUnderlineStyle,
+        baselineOffset: CGFloat, lineFragmentRect lineRect: CGRect,
+        lineFragmentGlyphRange lineGlyphRange: NSRange, containerOrigin: CGPoint
+    ) {
+        drawInlineDecoration(for: glyphRange, origin: containerOrigin) {
+            super.drawStrikethrough(
+                forGlyphRange: glyphRange, strikethroughType: strikethroughVal,
+                baselineOffset: baselineOffset, lineFragmentRect: lineRect,
+                lineFragmentGlyphRange: lineGlyphRange, containerOrigin: containerOrigin)
+        }
+    }
+
     override func drawUnderline(
         forGlyphRange glyphRange: NSRange, underlineType underlineVal: NSUnderlineStyle,
         baselineOffset: CGFloat, lineFragmentRect lineRect: CGRect,
@@ -1072,9 +1290,11 @@ final class CodeLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
                 origin.y += max(1.5, (font?.pointSize ?? DocumentTypography.bodySize) * 0.1)
             }
         }
-        super.drawUnderline(
-            forGlyphRange: glyphRange, underlineType: underlineVal, baselineOffset: baselineOffset,
-            lineFragmentRect: lineRect, lineFragmentGlyphRange: lineGlyphRange, containerOrigin: origin)
+        drawInlineDecoration(for: glyphRange, origin: origin) {
+            super.drawUnderline(
+                forGlyphRange: glyphRange, underlineType: underlineVal, baselineOffset: baselineOffset,
+                lineFragmentRect: lineRect, lineFragmentGlyphRange: lineGlyphRange, containerOrigin: origin)
+        }
     }
 
     override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
@@ -1492,14 +1712,13 @@ final class CodeLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
 /// Keeps the persisted SwiftUI attributes separate from the platform input system.
 enum NativeTextAttributes {
     // Link decoration belongs to the view, not stored text or typing attributes.
-    // Omitting foregroundColor and font preserves the surrounding run's appearance.
+    // The accent distinguishes links from ordinary underlines without changing stored colors or fonts.
     static var linkTextAttributes: [NSAttributedString.Key: Any] {
-        #if os(macOS)
-            let color = NSColor.secondaryLabelColor
-        #else
-            let color = UIColor.secondaryLabel
-        #endif
-        return [.underlineStyle: NSUnderlineStyle.single.rawValue, .underlineColor: color]
+        [
+            .foregroundColor: AppTheme.nativeAccent,
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+            .underlineColor: AppTheme.nativeAccent,
+        ]
     }
 
     // Display scaling is reversible; stored font sizes remain independent of the reading layout.
@@ -1563,6 +1782,12 @@ enum NativeTextAttributes {
         let lower = source.paragraphRange(for: NSRange(location: lowerProbe, length: 0)).location
         let upper = NSMaxRange(source.paragraphRange(for: NSRange(location: upperProbe, length: 0)))
         return NSRange(location: lower, length: upper - lower)
+    }
+
+    /// Refresh display-only gaps during composition without rewriting marked text
+    /// or normalizing its paragraph and semantic attributes.
+    static func layoutInlineCodeSpacing(_ text: NSMutableAttributedString, around affected: NSRange) {
+        layoutInlineCode(text, in: paragraphRegion(in: text, around: affected))
     }
 
     private static func layoutInlineCode(_ text: NSMutableAttributedString, in region: NSRange) {

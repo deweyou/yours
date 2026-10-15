@@ -5,6 +5,36 @@ import Testing
 
 @MainActor
 struct EditorCommandContractTests {
+    @Test func paragraphMenuKeyboardSkipsDisabledAndAppliesOnce() {
+        let state = EditorControlsState()
+        state.items = [
+            EditorControlItem(id: "paragraph-body", title: "正文", symbol: "text.alignleft", action: .paragraph("body"), active: true),
+            EditorControlItem(
+                id: "paragraph-heading-1", title: "标题1", symbol: "textformat", action: .paragraph("heading:1"), enabled: false),
+            EditorControlItem(id: "paragraph-heading-2", title: "标题2", symbol: "textformat", action: .paragraph("heading:2")),
+        ]
+        var selections = 0
+        state.choose = { action in
+            if case .paragraph("heading:2") = action { selections += 1 }
+        }
+        state.toggleParagraphMenu()
+        #expect(state.paragraphHighlight == 0)
+        #expect(state.handleParagraphKey("down"))
+        #expect(state.paragraphHighlight == 2)
+        #expect(state.handleParagraphKey("down"))
+        #expect(state.paragraphHighlight == 0)
+        #expect(state.handleParagraphKey("up"))
+        #expect(state.paragraphHighlight == 2)
+        #expect(state.handleParagraphKey("return"))
+        #expect(selections == 1)
+        #expect(state.paragraphExpanded == false)
+        #expect(state.handleParagraphKey("return") == false)
+        state.toggleParagraphMenu()
+        #expect(state.handleParagraphKey("escape"))
+        #expect(state.paragraphExpanded == false)
+        #expect(selections == 1)
+    }
+
     @Test(arguments: ["h2", "H2", "heading2", "标题二"])
     func headingAliasesResolveToTheSameCommand(query: String) {
         #expect(EditorCommandCatalog.matching(query).first?.id == "heading-2")

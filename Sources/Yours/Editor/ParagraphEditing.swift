@@ -47,9 +47,9 @@ enum DocumentTypography {
     static let selectionLineSpacingShare: CGFloat = 1 / 3
     static let inlineCodeScale: CGFloat = 0.93
     static let inlineCodePaddingRatio: CGFloat = 0.5
+    static let inlineCodeMarginRatio: CGFloat = 0.3
     static let inlineCodeVerticalPaddingRatio: CGFloat = 0.14
     static let inlineCodeRadiusRatio: CGFloat = 0.46
-    static let inlineCodeMarginRatio: CGFloat = 0.3
     static let inlineCodeBackgroundRiseRatio: CGFloat = 0.08
     static let codeLineSpacing: CGFloat = 3
     static let codeInset: CGFloat = 16

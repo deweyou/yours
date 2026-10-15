@@ -17,6 +17,8 @@ final class EditorControlsState {
     var highlighted = 0
     var maximumMenuHeight: CGFloat = 300
     var isSlash = false
+    var paragraphExpanded = false
+    var paragraphHighlight = 0
     var detail: String?
     var address = ""
     var rows = 3
@@ -25,16 +27,107 @@ final class EditorControlsState {
     var cancel: () -> Void = {}
     var detailChanged: () -> Void = {}
 
+    var paragraphItems: [EditorControlItem] { items.filter { $0.id.hasPrefix("paragraph-") } }
+
+    func toggleParagraphMenu() {
+        paragraphExpanded.toggle()
+        paragraphHighlight = paragraphItems.firstIndex(where: \.active) ?? 0
+        detailChanged()
+    }
+
+    func handleParagraphKey(_ key: String) -> Bool {
+        guard paragraphExpanded else { return false }
+        if key == "escape" || key == "tab" {
+            paragraphExpanded = false
+            detailChanged()
+            return key == "escape"
+        }
+        let available = paragraphItems.indices.filter { paragraphItems[$0].enabled }
+        if key == "up" || key == "down" {
+            guard !available.isEmpty else { return true }
+            let current = available.firstIndex(of: paragraphHighlight) ?? 0
+            paragraphHighlight = available[(current + (key == "up" ? available.count - 1 : 1)) % available.count]
+            return true
+        }
+        if key == "return" {
+            guard paragraphItems.indices.contains(paragraphHighlight), paragraphItems[paragraphHighlight].enabled else { return true }
+            let action = paragraphItems[paragraphHighlight].action
+            paragraphExpanded = false
+            choose(action)
+            return true
+        }
+        return false
+    }
+
     func open(_ detail: String) {
+        paragraphExpanded = false
         self.detail = detail
         detailChanged()
     }
 }
 
+@MainActor
+private enum ParagraphControlIcon {
+    static func image(for action: EditorAction?, symbol: String) -> Image {
+        if case .paragraph(let style) = action,
+            style.hasPrefix("heading:"), let level = Int(style.dropFirst("heading:".count)),
+            (1...6).contains(level)
+        {
+            #if SWIFT_PACKAGE
+                let bundle = Bundle.module
+            #else
+                let bundle = Bundle.main
+            #endif
+            return Image("heading-\(level)", bundle: bundle).renderingMode(.template)
+        }
+        return Image(systemName: symbol)
+    }
+}
+
+#if os(macOS)
+    private struct SelectionSurface: ViewModifier {
+        var cornerRadius: CGFloat
+        @Environment(\.colorScheme) private var colorScheme
+        @Environment(\.colorSchemeContrast) private var contrast
+
+        func body(content: Content) -> some View {
+            let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            content
+                .background(Color(nsColor: .controlBackgroundColor), in: shape)
+                .overlay {
+                    shape.strokeBorder(
+                        Color.primary.opacity(contrast == .increased ? 0.35 : 0.12), lineWidth: 0.5
+                    ).allowsHitTesting(false)
+                }
+                .shadow(color: .black.opacity(colorScheme == .dark ? 0.16 : 0.06), radius: 3, y: 2)
+        }
+    }
+#endif
+
 private struct EditorControlsView: View {
     @Bindable var state: EditorControlsState
+    @State private var hoveredControl: String?
+    private var isSelectionToolbar: Bool { !state.isSlash && state.detail == nil }
 
     var body: some View {
+        #if os(macOS)
+            if isSelectionToolbar {
+                VStack(alignment: .leading, spacing: 4) {
+                    selectionToolbar.padding(3)
+                        .modifier(SelectionSurface(cornerRadius: 16))
+                    if state.paragraphExpanded { paragraphMenu }
+                }
+                .fixedSize()
+                .padding(8)  // Leave room for the surface shadow inside the transparent panel.
+            } else {
+                standardPanel
+            }
+        #else
+            standardPanel
+        #endif
+    }
+
+    private var standardPanel: some View {
         VStack(alignment: .leading, spacing: 8) {
             if state.detail == "link" {
                 linkEditor
@@ -49,7 +142,10 @@ private struct EditorControlsView: View {
         #if os(iOS)
             .buttonStyle(EditorTouchButtonStyle())
         #endif
-        .padding(8)
+        .padding(isSelectionToolbar ? 3 : 8)
+        #if os(macOS)
+            .glassEffect(.regular, in: .rect(cornerRadius: 12))
+        #endif
         .fixedSize(horizontal: false, vertical: true)
         #if os(macOS)
             .onExitCommand {
@@ -78,13 +174,17 @@ private struct EditorControlsView: View {
                         Button {
                             if command.id == "table" { state.open("table") } else { state.choose(command.action) }
                         } label: {
-                            Label(command.title, systemImage: command.symbol)
-                                .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 7).padding(.horizontal, 6)
-                                #if os(iOS)
-                                    .frame(minHeight: 44)
-                                #endif
-                                .background(
-                                    index == state.highlighted ? Color.accentColor.opacity(0.18) : .clear, in: .rect(cornerRadius: 5))
+                            Label {
+                                Text(command.title)
+                            } icon: {
+                                ParagraphControlIcon.image(for: command.action, symbol: command.symbol)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 7).padding(.horizontal, 6)
+                            #if os(iOS)
+                                .frame(minHeight: 44)
+                            #endif
+                            .background(
+                                index == state.highlighted ? Color.accentColor.opacity(0.18) : .clear, in: .rect(cornerRadius: 5))
                         }
                         .buttonStyle(.plain)
                         #if os(macOS)
@@ -103,53 +203,120 @@ private struct EditorControlsView: View {
         .accessibilityIdentifier("slash-menu")
     }
 
+    private var paragraphItems: [EditorControlItem] {
+        state.items.filter { $0.id.hasPrefix("paragraph-") }
+    }
+
     private var selectionToolbar: some View {
-        HStack(spacing: 3) {
-            Menu {
-                ForEach(state.items.filter { $0.id.hasPrefix("paragraph-") }) { item in
-                    Button(item.title) { state.choose(item.action) }.disabled(!item.enabled)
-                }
-            } label: {
-                Image(systemName: "textformat.size")
-            }
-            .help("format.menu").accessibilityLabel("format.menu")
-            .accessibilityIdentifier("selection-style")
-            Divider().frame(height: 18)
-            ForEach(state.items.filter { ["bold", "italic", "underline", "strike", "inline-code"].contains($0.id) }) { item in
-                Button {
-                    state.choose(item.action)
-                } label: {
-                    Image(systemName: item.symbol).frame(width: 26, height: 26)
-                        .background(item.active ? Color.accentColor.opacity(0.2) : .clear, in: .rect(cornerRadius: 4))
-                }
-                .buttonStyle(.plain)
-                #if os(macOS)
-                    .background { if item.enabled { PointingHandRegion() } }
-                #endif
-                .disabled(!item.enabled).help(item.title)
-                .accessibilityLabel(item.title)
-                .accessibilityValue(item.mixed ? L10n.string("editor.mixed") : item.active ? L10n.string("editor.enabled") : "")
-                .accessibilityIdentifier("selection-" + item.id)
-            }
+        HStack(spacing: 2) {
             Button {
-                state.open("link")
+                state.toggleParagraphMenu()
             } label: {
-                Image(systemName: "link").frame(width: 26, height: 26)
-            }
-            .buttonStyle(.plain).disabled(!state.items.contains { $0.id == "link" && $0.enabled })
-            .help("link.add_or_edit").accessibilityLabel("link.add_or_edit").accessibilityIdentifier("selection-link")
-            Menu {
-                ForEach(state.items.filter { ["quote", "indent", "outdent", "clear"].contains($0.id) }) { item in
-                    Button(item.title) { state.choose(item.action) }.disabled(!item.enabled)
+                let selected = paragraphItems.first(where: \.active)
+                HStack(spacing: 3) {
+                    ParagraphControlIcon.image(for: selected?.action, symbol: selected?.symbol ?? "textformat")
+                        .frame(width: 16, height: 16)
+                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
                 }
-            } label: {
-                Image(systemName: "ellipsis")
+                .frame(width: 36, height: 26)
+                .contentShape(.rect)
             }
-            .accessibilityLabel("editor.more")
+            .buttonStyle(.plain)
+            .frame(height: 26)
+            .help(paragraphItems.first(where: \.active)?.title ?? L10n.string("editor.mixed"))
+            .accessibilityLabel("format.menu")
+            .accessibilityValue(paragraphItems.first(where: \.active)?.title ?? L10n.string("editor.mixed"))
+            .accessibilityIdentifier("selection-style")
+            .background(
+                (hoveredControl == "style" || state.paragraphExpanded) ? Color.primary.opacity(0.07) : .clear,
+                in: UnevenRoundedRectangle(
+                    topLeadingRadius: 13, bottomLeadingRadius: 13, bottomTrailingRadius: 6, topTrailingRadius: 6)
+            )
+            .onHover { hoveredControl = $0 ? "style" : nil }
+            #if os(macOS)
+                .background(PointingHandRegion())
+            #endif
+            Divider().frame(height: 14).padding(.horizontal, 2)
+            ForEach(state.items.filter { ["bold", "italic", "underline", "strike", "inline-code"].contains($0.id) }) { item in
+                toolbarButton(item)
+            }
+            Divider().frame(height: 14).padding(.horizontal, 2)
+            ForEach(state.items.filter { ["link", "quote"].contains($0.id) }) { item in
+                toolbarButton(item, trailingCornerRadius: item.id == "quote" ? 13 : 6)
+            }
         }
-        .menuStyle(.borderlessButton)
+        .font(.system(size: 12))
         .fixedSize()
         .accessibilityElement(children: .contain)
+    }
+
+    private var paragraphMenu: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(paragraphItems.enumerated()), id: \.element.id) { index, item in
+                if index == 1 || item.id == "paragraph-bullet" || item.id == "paragraph-code" {
+                    Divider().padding(.horizontal, 6).padding(.vertical, 4)
+                }
+                Button {
+                    state.paragraphExpanded = false
+                    state.choose(item.action)
+                } label: {
+                    HStack(spacing: 8) {
+                        ParagraphControlIcon.image(for: item.action, symbol: item.symbol)
+                            .frame(width: 16, height: 16)
+                        Text(item.title)
+                        Spacer(minLength: 8)
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 10, weight: .semibold))
+                            .opacity(item.active ? 1 : 0)
+                    }
+                    .font(.system(size: 12))
+                    .padding(.horizontal, 8).frame(height: 24)
+                    .contentShape(.rect)
+                    .background(state.paragraphHighlight == index ? Color.primary.opacity(0.07) : .clear, in: .rect(cornerRadius: 5))
+                }
+                .buttonStyle(.plain)
+                .disabled(!item.enabled)
+                .onHover { if $0 && item.enabled { state.paragraphHighlight = index } }
+                #if os(macOS)
+                    .background(PointingHandRegion())
+                #endif
+                .accessibilityLabel(item.title)
+                .accessibilityValue(item.active ? L10n.string("editor.enabled") : "")
+                .accessibilityIdentifier("selection-" + item.id)
+            }
+        }
+        .padding(4).frame(width: 152)
+        #if os(macOS)
+            .modifier(SelectionSurface(cornerRadius: 9))
+        #endif
+        .accessibilityElement(children: .contain)
+    }
+
+    private func toolbarButton(_ item: EditorControlItem, trailingCornerRadius: CGFloat = 6) -> some View {
+        Button {
+            if item.id == "link" { state.open("link") } else { state.choose(item.action) }
+        } label: {
+            Image(systemName: item.symbol)
+                .foregroundStyle(item.enabled && item.active ? Color.accentColor : Color.primary)
+                .opacity(item.enabled ? 1 : 0.3)
+                .frame(width: 26, height: 26)
+                .background(
+                    hoveredControl == item.id && item.enabled ? Color.primary.opacity(0.07) : .clear,
+                    in: UnevenRoundedRectangle(
+                        topLeadingRadius: 6, bottomLeadingRadius: 6,
+                        bottomTrailingRadius: trailingCornerRadius, topTrailingRadius: trailingCornerRadius)
+                )
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { hoveredControl = $0 && item.enabled ? item.id : nil }
+        #if os(macOS)
+            .background { PointingHandRegion(cursor: item.enabled ? .pointingHand : .operationNotAllowed) }
+        #endif
+        .disabled(!item.enabled).help(item.title)
+        .accessibilityLabel(item.title)
+        .accessibilityValue(item.mixed ? L10n.string("editor.mixed") : item.active ? L10n.string("editor.enabled") : "")
+        .accessibilityIdentifier("selection-" + item.id)
     }
 
     private var linkEditor: some View {
@@ -207,6 +374,7 @@ private struct EditorControlsView: View {
         }
         let state = EditorControlsState()
         private var panel: Panel?
+        private var outsideClickMonitor: Any?
         private weak var editor: NSTextView?
         var isShowing: Bool { panel?.isVisible == true }
         var hasDetail: Bool { state.detail != nil }
@@ -217,6 +385,18 @@ private struct EditorControlsView: View {
                 return
             }
             self.editor = editor
+            if outsideClickMonitor == nil {
+                outsideClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+                    // AppKit dispatches local event monitors on the main thread.
+                    MainActor.assumeIsolated {
+                        if let self, self.state.paragraphExpanded, event.window !== self.panel {
+                            self.state.paragraphExpanded = false
+                            self.state.detailChanged()
+                        }
+                    }
+                    return event
+                }
+            }
             if panel == nil {
                 let panel = Panel(
                     contentRect: .zero, styleMask: [.nonactivatingPanel, .fullSizeContentView], backing: .buffered, defer: false)
@@ -227,7 +407,7 @@ private struct EditorControlsView: View {
                 panel.isOpaque = false
                 panel.hasShadow = true
                 let hosting = NSHostingView(
-                    rootView: EditorControlsView(state: state).glassEffect(.regular, in: .rect(cornerRadius: 10)))
+                    rootView: EditorControlsView(state: state))
                 panel.contentView = hosting
                 self.panel = panel
                 NotificationCenter.default.addObserver(
@@ -236,6 +416,8 @@ private struct EditorControlsView: View {
                     self, selector: #selector(windowResigned(_:)), name: NSWindow.didResignKeyNotification, object: window)
             }
             guard let panel else { return }
+            panel.appearance = editor.effectiveAppearance
+            panel.hasShadow = state.isSlash || state.detail != nil
             let start = editor.firstRect(forCharacterRange: NSRange(location: range.location, length: 0), actualRange: nil)
             let end = editor.firstRect(
                 forCharacterRange: NSRange(location: range.length > 0 ? NSMaxRange(range) - 1 : range.location, length: 0),
@@ -246,10 +428,12 @@ private struct EditorControlsView: View {
                 close()
                 return
             }
+            panel.contentView?.layoutSubtreeIfNeeded()
             let size = panel.contentView?.fittingSize ?? CGSize(width: 280, height: 300)
             // Align to the selection's beginning, below its last line, including wrapped selections.
-            var origin = CGPoint(x: start.minX, y: screen.minY - size.height - 5)
-            if origin.y < visible.minY { origin.y = screen.maxY + 5 }
+            let surfaceInset: CGFloat = state.isSlash || state.detail != nil ? 0 : 8
+            var origin = CGPoint(x: start.minX - surfaceInset, y: screen.minY - size.height - 8 + surfaceInset)
+            if origin.y < visible.minY { origin.y = screen.maxY + 8 - surfaceInset }
             origin.y = max(visible.minY, min(origin.y, visible.maxY - size.height))
             origin.x = max(visible.minX, min(origin.x, visible.maxX - size.width))
             panel.setFrame(CGRect(origin: origin, size: size), display: true)
@@ -279,6 +463,9 @@ private struct EditorControlsView: View {
         @objc private func applicationResigned() { close() }
 
         func close() {
+            if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
+            outsideClickMonitor = nil
+            state.paragraphExpanded = false
             if let panel { panel.parent?.removeChildWindow(panel) }
             panel?.orderOut(nil)
             state.detail = nil

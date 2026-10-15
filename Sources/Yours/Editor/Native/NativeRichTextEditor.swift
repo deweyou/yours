@@ -118,6 +118,9 @@ struct NativeRichTextEditor {
                 refreshTables()
             }
             if parent.text != lastValue {
+                #if os(macOS)
+                    (textView as? ReadingMacTextView)?.discardInlineCodeBoundary()
+                #endif
                 revision += 1
                 dismissControls()
                 #if os(macOS)
@@ -167,6 +170,7 @@ struct NativeRichTextEditor {
                 textView.typingAttributes = nativeAttributes
             }
             #if os(macOS)
+                (textView as? ReadingMacTextView)?.restoreInlineCodeBoundaryTyping()
                 (textView as? ReadingMacTextView)?.updateEmptyQuoteBar()
             #endif
             if let storage { lastNativeValue = NSAttributedString(attributedString: storage) }
@@ -1039,7 +1043,8 @@ struct NativeRichTextEditor {
                 return
             }
             controlsTargetRange = range
-            let attributes = Array(parent.selection.attributes(in: rich))
+            let selectedRange = Range<AttributedString.Index>(range, in: rich)
+            let attributes = selectedRange.map { Array(rich[$0].runs.map(\.attributes)) } ?? []
             let definitions: [(String, String, String, EditorAction)] = [
                 ("bold", "format.bold", "bold", .emphasis(1)),
                 ("italic", "format.italic", "italic", .emphasis(2)),
@@ -1060,10 +1065,15 @@ struct NativeRichTextEditor {
                         enabled: EditorCommandEditing.isAllowed(action, text: rich, range: range),
                         active: !active.isEmpty && active.allSatisfy { $0 }, mixed: active.contains(true) && active.contains(false))
                 }
-                + EditorCommandCatalog.paragraphs.filter { $0.id != "table" && $0.id != "quote" }.map {
-                    EditorControlItem(
-                        id: "paragraph-" + $0.id, title: $0.title, symbol: $0.symbol, action: $0.action,
-                        enabled: EditorCommandEditing.isAllowed($0.action, text: rich, range: range))
+                + EditorCommandCatalog.paragraphs.filter { $0.id != "table" && $0.id != "quote" }.map { command in
+                    let active = attributes.map {
+                        EditorCommandEditing.isActive(command.action, attributes: $0, context: parent.fontContext)
+                    }
+                    return EditorControlItem(
+                        id: "paragraph-" + command.id, title: command.title, symbol: command.symbol, action: command.action,
+                        enabled: EditorCommandEditing.isAllowed(command.action, text: rich, range: range),
+                        active: !active.isEmpty && active.allSatisfy { $0 },
+                        mixed: active.contains(true) && active.contains(false))
                 }
             controls.state.isSlash = isSlash
             controls.state.address = attributes.compactMap { $0.link?.absoluteString }.first ?? ""
@@ -1096,6 +1106,7 @@ struct NativeRichTextEditor {
 
         func handleControlKey(_ key: String) -> Bool {
             guard !hasMarkedText, controls.isShowing else { return false }
+            if controls.state.handleParagraphKey(key) { return true }
             if key == "escape" {
                 dismissControls()
                 return true
@@ -1150,6 +1161,9 @@ struct NativeRichTextEditor {
         }
 
         func performControlAction(_ action: EditorAction, range: NSRange, slash: NSRange? = nil) {
+            #if os(macOS)
+                (textView as? ReadingMacTextView)?.discardInlineCodeBoundary()
+            #endif
             guard !hasMarkedText, let storage, let view = textView, NSMaxRange(range) <= storage.length else { return }
             var rich = NativeTextAttributes.rich(storage)
             var target = range
@@ -1327,6 +1341,8 @@ struct NativeRichTextEditor {
             textView?.typingAttributes = attributes
             locallyAppliedTypingAttributes = attributes
             #if os(macOS)
+                (textView as? ReadingMacTextView)?.setInlineCodeBoundary(
+                    inside: attributes[.yoursCodeStyle] as? String == "inline", publish: false)
                 textView?.didChangeText()
                 textView?.needsDisplay = true
                 (textView as? ReadingMacTextView)?.updateEmptyQuoteBar()
@@ -1341,6 +1357,222 @@ struct NativeRichTextEditor {
 
 #if os(macOS)
     final class ReadingMacTextView: NSTextView {
+        override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
+            super.drawInsertionPoint(in: visibleInsertionPointRect(rect), color: color, turnedOn: flag)
+        }
+
+        func visibleInsertionPointRect(_ rect: NSRect) -> NSRect {
+            guard let font = typingAttributes[.font] as? NSFont, rect.height > 0 else { return rect }
+            // The reading line box includes mixed-script leading and extra spacing.
+            // Use a stable font-sized cursor without changing TextKit's input or selection geometry.
+            let metrics = NSFont.systemFont(ofSize: font.pointSize)
+            let height = min(rect.height, ceil(metrics.ascender - metrics.descender))
+            let paragraph = typingAttributes[.paragraphStyle] as? NSParagraphStyle
+            let spacing = (paragraph?.lineSpacing ?? 0) * DocumentTypography.selectionLineSpacingShare
+            let offset = max(0, (rect.height - spacing - height) / 2)
+            var top = rect.minY + offset
+            if let layout = layoutManager, let storage = textStorage, storage.length > 0 {
+                let caret = min(selectedRange().location, storage.length)
+                let trailingEmptyLine = caret == storage.length && storage.string.hasSuffix("\n")
+                if !trailingEmptyLine {
+                    let character = min(caret, storage.length - 1)
+                    let glyph = layout.glyphIndexForCharacter(at: character)
+                    let line = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+                    let baseline = textContainerOrigin.y + line.minY + layout.location(forGlyphAt: glyph).y
+                    top = max(rect.minY, min(baseline - metrics.ascender, rect.maxY - height))
+                }
+            }
+            if let point = inlineCodeBoundaryPoint() {
+                return NSRect(
+                    x: point.x + textContainerOrigin.x, y: point.y + textContainerOrigin.y - height / 2,
+                    width: rect.width, height: height)
+            }
+            return NSRect(x: rect.minX, y: top, width: rect.width, height: height)
+        }
+
+        override func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
+            let original = super.firstRect(forCharacterRange: range, actualRange: actualRange)
+            guard range.length == 0, range == selectedRange(), let point = inlineCodeBoundaryPoint(), let window else { return original }
+            let local = NSRect(
+                x: point.x + textContainerOrigin.x,
+                y: point.y + textContainerOrigin.y - original.height / 2, width: original.width, height: original.height)
+            return window.convertToScreen(convert(local, to: nil))
+        }
+
+        struct InlineCodeBoundary {
+            var index: Int
+            var inside: Bool
+        }
+
+        private(set) var inlineCodeBoundary: InlineCodeBoundary?
+        private var composingInlineCodeSide: Bool?
+
+        func discardInlineCodeBoundary() {
+            inlineCodeBoundary = nil
+            composingInlineCodeSide = nil
+        }
+
+        func inlineCodeRange(at index: Int) -> NSRange? {
+            guard let storage = textStorage, index >= 0, index <= storage.length else { return nil }
+            for probe in [index, index - 1] where probe >= 0 && probe < storage.length {
+                var range = NSRange()
+                if storage.attribute(
+                    .yoursCodeStyle, at: probe, longestEffectiveRange: &range,
+                    in: NSRange(location: 0, length: storage.length)) as? String == "inline",
+                    index == range.location || index == NSMaxRange(range)
+                {
+                    return range
+                }
+            }
+            return nil
+        }
+
+        @discardableResult func setInlineCodeBoundary(inside: Bool, publish: Bool = true) -> Bool {
+            let selection = selectedRange()
+            guard selection.length == 0, !hasMarkedText(), inlineCodeRange(at: selection.location) != nil else {
+                discardInlineCodeBoundary()
+                return false
+            }
+            inlineCodeBoundary = InlineCodeBoundary(index: selection.location, inside: inside)
+            restoreInlineCodeBoundaryTyping()
+            needsDisplay = true
+            updateInsertionPointStateAndRestartTimer(true)
+            if publish { didResolveTypingAttributes?() }
+            return true
+        }
+
+        func restoreInlineCodeBoundaryTyping() {
+            guard let boundary = inlineCodeBoundary, selectedRange() == NSRange(location: boundary.index, length: 0),
+                !hasMarkedText(), let storage = textStorage, let range = inlineCodeRange(at: boundary.index)
+            else { return }
+            let leading = boundary.index == range.location
+            let insideIndex = leading ? range.location : NSMaxRange(range) - 1
+            let outsideIndex = leading ? range.location - 1 : NSMaxRange(range)
+            let hasBodyNeighbor =
+                outsideIndex >= 0 && outsideIndex < storage.length
+                && storage.attribute(.yoursCodeStyle, at: outsideIndex, effectiveRange: nil) as? String != "inline"
+            var attributes = storage.attributes(at: !boundary.inside && hasBodyNeighbor ? outsideIndex : insideIndex, effectiveRange: nil)
+            if let original = attributes.removeValue(forKey: .yoursInlineSpacing) as? CGFloat {
+                if original == 0 { attributes.removeValue(forKey: .kern) } else { attributes[.kern] = original }
+            }
+            if !boundary.inside && !hasBodyNeighbor {
+                attributes.removeValue(forKey: .yoursCodeStyle)
+                attributes.removeValue(forKey: .yoursCodeLanguage)
+                attributes.removeValue(forKey: .yoursSyntaxColor)
+                attributes.removeValue(forKey: .backgroundColor)
+                let role = attributes[.yoursParagraphStyle] as? String ?? "body"
+                let emphasis = attributes[.yoursInlineEmphasis] as? Int ?? 0
+                let context = EnvironmentValues().fontResolutionContext
+                NativeTextAttributes.setFont(
+                    DocumentTypography.font(for: role, emphasis: emphasis, context: context).resolve(in: context).ctFont,
+                    emphasis: emphasis, role: role, in: &attributes)
+            }
+            attributes.removeValue(forKey: .attachment)
+            attributes.removeValue(forKey: .yoursTable)
+            typingAttributes = attributes
+        }
+
+        /// Container coordinates for the two visual stops at a single text index.
+        func inlineCodeBoundaryPoint() -> CGPoint? {
+            guard let boundary = inlineCodeBoundary, selectedRange() == NSRange(location: boundary.index, length: 0),
+                let range = inlineCodeRange(at: boundary.index), let storage = textStorage,
+                let layout = layoutManager as? CodeLayoutManager, let container = textContainer
+            else { return nil }
+            let glyphs = layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            let surfaces = layout.inlineCodeBackgroundRects(forGlyphRange: glyphs, in: container)
+            let leading = boundary.index == range.location
+            guard let surface = leading ? surfaces.first : surfaces.last,
+                let font = storage.attribute(.font, at: leading ? range.location : NSMaxRange(range) - 1, effectiveRange: nil) as? NSFont
+            else { return nil }
+            let padding = font.pointSize * DocumentTypography.inlineCodePaddingRatio
+            let margin = font.pointSize * DocumentTypography.inlineCodeMarginRatio
+            let x =
+                leading
+                ? (boundary.inside ? surface.minX + padding : surface.minX - margin)
+                : (boundary.inside ? surface.maxX - padding : surface.maxX + margin)
+            let glyph = leading ? glyphs.location : NSMaxRange(glyphs) - 1
+            let line = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+            let baseline = line.minY + layout.location(forGlyphAt: glyph).y
+            let metrics = NSFont.systemFont(ofSize: font.pointSize)
+            let height = ceil(metrics.ascender - metrics.descender)
+            return CGPoint(x: x, y: baseline - metrics.ascender + height / 2)
+        }
+
+        private func moveAcrossInlineCodeBoundary(right: Bool, sender: Any?) {
+            guard selectedRange().length == 0, !hasMarkedText() else {
+                discardInlineCodeBoundary()
+                if right { super.moveRight(sender) } else { super.moveLeft(sender) }
+                return
+            }
+            let index = selectedRange().location
+            if let range = inlineCodeRange(at: index) {
+                let leading = index == range.location
+                let inside = inlineCodeBoundary?.inside ?? (typingAttributes[.yoursCodeStyle] as? String == "inline")
+                if (right && leading && !inside) || (!right && !leading && !inside) {
+                    setInlineCodeBoundary(inside: true)
+                    return
+                }
+                if (right && !leading && inside) || (!right && leading && inside) {
+                    setInlineCodeBoundary(inside: false)
+                    return
+                }
+            }
+            discardInlineCodeBoundary()
+            if right { super.moveRight(sender) } else { super.moveLeft(sender) }
+            if let range = inlineCodeRange(at: selectedRange().location) {
+                let leading = selectedRange().location == range.location
+                setInlineCodeBoundary(inside: right ? !leading : leading)
+            }
+        }
+
+        override func moveRight(_ sender: Any?) { moveAcrossInlineCodeBoundary(right: true, sender: sender) }
+        override func moveLeft(_ sender: Any?) { moveAcrossInlineCodeBoundary(right: false, sender: sender) }
+        override func moveForward(_ sender: Any?) { moveRight(sender) }
+        override func moveBackward(_ sender: Any?) { moveLeft(sender) }
+
+        override func setSelectedRange(_ charRange: NSRange, affinity: NSSelectionAffinity, stillSelecting flag: Bool) {
+            if let boundary = inlineCodeBoundary, charRange != NSRange(location: boundary.index, length: 0) { discardInlineCodeBoundary() }
+            super.setSelectedRange(charRange, affinity: affinity, stillSelecting: flag)
+        }
+
+        override func insertText(_ insertString: Any, replacementRange: NSRange) {
+            restoreInlineCodeBoundaryTyping()
+            let side = composingInlineCodeSide ?? inlineCodeBoundary?.inside
+            composingInlineCodeSide = nil
+            super.insertText(insertString, replacementRange: replacementRange)
+            if let side, !hasMarkedText() { setInlineCodeBoundary(inside: side) }
+        }
+
+        override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+            restoreInlineCodeBoundaryTyping()
+            // Marked text moves the native selection before commit. Preserve the
+            // logical side independently of that temporary UTF-16 position.
+            let side = composingInlineCodeSide ?? inlineCodeBoundary?.inside
+            super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+            if hasMarkedText(), let storage = textStorage {
+                let attributes = typingAttributes
+                NativeTextAttributes.layoutInlineCodeSpacing(storage, around: markedRange())
+                typingAttributes = attributes
+            }
+            composingInlineCodeSide = side
+        }
+
+        override func unmarkText() {
+            let side = composingInlineCodeSide
+            super.unmarkText()
+            composingInlineCodeSide = nil
+            if let side { setInlineCodeBoundary(inside: side) }
+        }
+
+        override func keyDown(with event: NSEvent) {
+            if !event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
+                || [125, 126, 115, 119].contains(event.keyCode)
+            {
+                discardInlineCodeBoundary()
+            }
+            super.keyDown(with: event)
+        }
+
         var selectionFinished: (() -> Void)?
         var dismissControlMenus: (() -> Void)?
         override func menu(for event: NSEvent) -> NSMenu? {
@@ -1644,8 +1876,8 @@ struct NativeRichTextEditor {
         override func cursorUpdate(with event: NSEvent) {
             // This text view also receives tracking events below SwiftUI overlays.
             // Let the foreground control win instead of overwriting its hand cursor.
-            if PointingHandRegionView.contains(event.locationInWindow, in: window) {
-                NSCursor.pointingHand.set()
+            if let cursor = PointingHandRegionView.cursor(at: event.locationInWindow, in: window) {
+                cursor.set()
                 return
             }
             let point = convert(event.locationInWindow, from: nil)
@@ -1708,6 +1940,7 @@ struct NativeRichTextEditor {
             return layout.taskMarkerHitRect(for: marker).contains(point)
         }
         override func performKeyEquivalent(with event: NSEvent) -> Bool {
+            if !event.modifierFlags.intersection([.command, .control]).isEmpty { discardInlineCodeBoundary() }
             if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
                 event.charactersIgnoringModifiers == "k", selectedRange().length > 0
             {
@@ -1717,6 +1950,7 @@ struct NativeRichTextEditor {
             return super.performKeyEquivalent(with: event)
         }
         override func mouseDown(with event: NSEvent) {
+            discardInlineCodeBoundary()
             let point = convert(event.locationInWindow, from: nil)
             if isEmptyTaskMarker(at: event), toggleEmptyTask?() == true {
                 window?.makeFirstResponder(self)
@@ -1748,8 +1982,20 @@ struct NativeRichTextEditor {
                 }
             }
             super.mouseDown(with: event)
+            let click = convert(event.locationInWindow, from: nil)
+            resolveInlineCodeTypingAttributes(at: CGPoint(x: click.x - textContainerOrigin.x, y: click.y - textContainerOrigin.y))
             selectionFinished?()
             resolveEmptyParagraphTypingAttributes()
+        }
+
+        func resolveInlineCodeTypingAttributes(at point: CGPoint) {
+            guard selectedRange().length == 0, !hasMarkedText(),
+                let range = inlineCodeRange(at: selectedRange().location),
+                let layout = layoutManager as? CodeLayoutManager, let container = textContainer
+            else { return }
+            let glyphs = layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            let inside = layout.inlineCodeBackgroundRects(forGlyphRange: glyphs, in: container).contains { $0.contains(point) }
+            setInlineCodeBoundary(inside: inside)
         }
 
         func resolveEmptyParagraphTypingAttributes() {

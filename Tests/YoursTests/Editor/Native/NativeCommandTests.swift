@@ -6,6 +6,36 @@
 
     @MainActor
     struct NativeCommandTests {
+        @Test func boldPreservesMixedInlineFormattingAndUndo() throws {
+            var source = AttributedString("前中文🌿后")
+            let decorated = try #require(source.range(of: "中文🌿"))
+            source[decorated][CodeStyleAttribute.self] = "inline"
+            source[decorated].underlineStyle = .single
+            source[decorated].strikethroughStyle = .single
+            let (view, coordinator, window) = editor(source)
+            defer { window.orderOut(nil) }
+            let before = NativeTextAttributes.rich(try #require(view.textStorage))
+            let range = NSRange(location: 0, length: view.string.utf16.count)
+            view.setSelectedRange(range)
+            let undo = try #require(view.undoManager)
+            undo.beginUndoGrouping()
+            coordinator.performControlAction(.emphasis(1), range: range)
+            undo.endUndoGrouping()
+            let storage = try #require(view.textStorage)
+            #expect(storage.attribute(.yoursCodeStyle, at: 1, effectiveRange: nil) as? String == "inline")
+            #expect(storage.attribute(.underlineStyle, at: 1, effectiveRange: nil) as? Int == NSUnderlineStyle.single.rawValue)
+            #expect(storage.attribute(.strikethroughStyle, at: 1, effectiveRange: nil) as? Int == NSUnderlineStyle.single.rawValue)
+            #expect(storage.attribute(.yoursCodeStyle, at: 0, effectiveRange: nil) == nil)
+            for index in [0, 1, storage.length - 1] {
+                #expect((storage.attribute(.yoursInlineEmphasis, at: index, effectiveRange: nil) as? Int ?? 0) & 1 == 1)
+            }
+            #expect(view.selectedRange() == range)
+            undo.undo()
+            #expect(NativeTextAttributes.rich(storage) == before)
+            undo.redo()
+            #expect(storage.attribute(.yoursCodeStyle, at: 1, effectiveRange: nil) as? String == "inline")
+        }
+
         @Test func slashConversionRestoresTextSelectionAndTypingWithOneUndo() throws {
             let (view, coordinator, window) = editor(AttributedString("中文🌿 /h2"))
             defer { window.orderOut(nil) }

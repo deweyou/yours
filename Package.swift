@@ -11,7 +11,8 @@ let package = Package(
             name: "Yours",
             resources: [
                 .copy("Resources/CodeFormatting"), .copy("Resources/Fonts"), .process("Resources/en.lproj"),
-                .process("Resources/zh-Hans.lproj"),
+                .process("Resources/zh-Hans.lproj"), .process("Resources/EditorIcons.xcassets"),
+                .copy("Resources/EditorIcons-LICENSE.txt"),
             ]),
         .testTarget(name: "YoursTests", dependencies: ["Yours"]),
     ]
