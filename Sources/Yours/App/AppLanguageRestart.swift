@@ -34,6 +34,7 @@
                     attempts=$((attempts + 1))
                 done
                 if [ -n "$4" ]; then
+                    set -x
                     exec /usr/bin/open -n --env "YOURS_UI_TEST_SESSION=$4" "$2" --args -AppleLanguages "($3)" -ApplePersistenceIgnoreState YES -YoursLanguageRelaunch YES -YoursUITestSession "$4"
                 else
                     exec /usr/bin/open -n "$2" --args -AppleLanguages "($3)" -ApplePersistenceIgnoreState YES -YoursLanguageRelaunch YES
@@ -42,6 +43,15 @@
                 "yours-language-restart", String(ProcessInfo.processInfo.processIdentifier), app.path, language.rawValue,
                 testSession,
             ]
+            #if DEBUG
+                if case .test = AppStorage.current.profile {
+                    let trace = AppStorage.current.directory.appendingPathComponent("language-restart.log")
+                    try JSONEncoder().encode(helper.arguments).write(to: trace, options: .atomic)
+                    let output = try FileHandle(forWritingTo: trace)
+                    try output.seekToEnd()
+                    helper.standardError = output
+                }
+            #endif
             try helper.run()
             pendingHelper = helper
             NSApplication.shared.terminate(nil)
