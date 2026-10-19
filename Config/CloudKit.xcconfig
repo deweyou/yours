@@ -1,0 +1,4 @@
+// Opt in with xcodebuild -xcconfig Config/CloudKit.xcconfig, or use as the target's base configuration.
+// Select your Apple Developer Team in Xcode first. Debug and Release use separate containers.
+YOURS_ICLOUD_CONTAINER = iCloud.app.yours.editor$(YOURS_CLOUD_SUFFIX)
+CODE_SIGN_ENTITLEMENTS = Config/CloudKit$(CONFIGURATION).entitlements

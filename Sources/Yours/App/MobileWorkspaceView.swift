@@ -203,7 +203,7 @@
 
         @ViewBuilder private var libraryContent: some View {
             if library == .settings {
-                AppSettingsView()
+                AppSettingsView(store: store)
             } else if let error = store.loadError {
                 ContentUnavailableView {
                     Label("storage.load_failed.title", systemImage: "exclamationmark.triangle")
