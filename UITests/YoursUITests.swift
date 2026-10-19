@@ -242,13 +242,6 @@ final class YoursUITests: XCTestCase {
             app.buttons["workspace-settings"].click()
             XCTAssertEqual(app.popUpButtons["settings-language"].value as? String, "English")
             XCTAssertEqual(app.popUpButtons["settings-theme"].label, "Theme")
-            let root = try XCTUnwrap(storageIdentity.split(separator: "|", maxSplits: 1).last)
-            let trace = URL(fileURLWithPath: String(root))
-                .appendingPathComponent("YoursUITests/\(testSession)/language-restart.log")
-            let restartDiagnostics = XCTAttachment(string: (try? String(contentsOf: trace, encoding: .utf8)) ?? "Restart trace unavailable")
-            restartDiagnostics.name = "Language restart command"
-            restartDiagnostics.lifetime = .keepAlways
-            add(restartDiagnostics)
             XCTAssertEqual(
                 storageProfile.value as? String, storageIdentity,
                 "Restart must reopen the same isolated storage root and session")

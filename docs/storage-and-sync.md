@@ -14,7 +14,7 @@
 
 普通开发预览反复启动使用固定资料库；Release 忽略测试环境变量。Swift Package 调试运行也使用开发目录，不连接 CloudKit。工作树共享相同开发 App ID 时会共享开发资料库，需复用同一个实例，不同时启动多份写入同一文件。要隔离专项预览，使用独立 bundle ID 并固定复用同一个测试 UUID；该模式禁止云端连接。
 
-Mac 语言重启通过 Debug 专用 `-YoursUITestSession <UUID>` 继续同一测试资料库和偏好。参数缺值、UUID 无效或与环境变量冲突时拒绝打开；Release 忽略该参数，测试会话始终禁止 CloudKit 连接。
+Mac 语言重启通过测试目录中的一次性会话凭据继续同一测试资料库和偏好，避免依赖系统重启时可能丢弃的参数。凭据绑定 App bundle 路径，60 秒有效，读取后删除；仅 macOS Debug App 读取，Release 与 Swift Package 忽略。测试会话始终禁止 CloudKit 连接。
 
 ## CloudKit 概念与空间归属
 

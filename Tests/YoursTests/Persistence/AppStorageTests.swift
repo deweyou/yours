@@ -30,21 +30,40 @@ struct AppStorageTests {
         }
     }
 
-    @Test func restartArgumentsPreserveTestIsolationAndFailClosed() throws {
-        let id = UUID().uuidString
-        let arguments = ["Yours", "-YoursUITestSession", id]
-        let storage = try AppStorage.resolve(isDebug: true, environment: [:], arguments: arguments)
-        #expect(storage.profile == .test(try #require(UUID(uuidString: id))))
-        #expect(!storage.allowsCloudSync)
-        #expect(try AppStorage.resolve(isDebug: false, environment: [:], arguments: arguments).profile == .production)
-        for invalid in [["-YoursUITestSession"], ["-YoursUITestSession", "invalid"]] {
-            #expect(throws: AppStorage.ConfigurationError.self) {
-                try AppStorage.resolve(isDebug: true, environment: [:], arguments: invalid)
-            }
+    @Test func relaunchTokenIsOneShotAndBoundToTheAppBundle() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let session = UUID()
+        let app = root.appendingPathComponent("Yours.app")
+        let storage = AppStorage(profile: .test(session), root: root)
+        let now = Date()
+        try storage.prepareTestRelaunch(bundleURL: app, now: now)
+        #expect(try AppStorage.consumeTestRelaunch(root: root, bundleURL: root.appendingPathComponent("Other.app"), now: now) == nil)
+        let restored = try #require(try AppStorage.consumeTestRelaunch(root: root, bundleURL: app, now: now))
+        let reopened = try AppStorage.resolve(isDebug: true, environment: ["YOURS_UI_TEST_SESSION": restored.uuidString], root: root)
+        #expect(reopened == storage)
+        #expect(!reopened.allowsCloudSync)
+        #expect(try AppStorage.consumeTestRelaunch(root: root, bundleURL: app, now: now) == nil)
+    }
+
+    @Test func expiredCancelledAndNonTestRelaunchesCannotSelectAnotherLibrary() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appendingPathComponent("Yours.app")
+        let now = Date()
+        let test = AppStorage(profile: .test(UUID()), root: root)
+        try test.prepareTestRelaunch(bundleURL: app, now: now)
+        #expect(try AppStorage.consumeTestRelaunch(root: root, bundleURL: app, now: now.addingTimeInterval(61)) == nil)
+        try test.prepareTestRelaunch(bundleURL: app)
+        try test.cancelTestRelaunch(bundleURL: app)
+        #expect(try AppStorage.consumeTestRelaunch(root: root, bundleURL: app) == nil)
+        for profile in [AppStorage.Profile.development, .production] {
+            try AppStorage(profile: profile, root: root).prepareTestRelaunch(bundleURL: app)
+            #expect(try AppStorage.consumeTestRelaunch(root: root, bundleURL: app) == nil)
         }
-        #expect(throws: AppStorage.ConfigurationError.self) {
-            try AppStorage.resolve(isDebug: true, environment: ["YOURS_UI_TEST_SESSION": UUID().uuidString], arguments: arguments)
-        }
+        let token = root.appendingPathComponent("YoursUITests/language-relaunch.json")
+        try Data("invalid".utf8).write(to: token)
+        #expect(throws: DecodingError.self) { try AppStorage.consumeTestRelaunch(root: root, bundleURL: app) }
     }
 
     @Test func syncPreferenceDefaultsOffAndSurvivesRestart() throws {

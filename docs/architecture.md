@@ -121,7 +121,7 @@ Mac 精简工作区不再持有分类、搜索与导入状态；左栏直接绑�
 
 `AppPreferences` 由 App 持有并注入窗口，使用 UserDefaults 持久化外观、语言与默认关闭的 iCloud 开关，不进入 notes.json。普通 Debug 使用固定开发 suite，有效 `YOURS_UI_TEST_SESSION` 使用独立测试 suite；两者与正式偏好隔离，自动测试不允许访问 CloudKit。
 
-`preferredColorScheme` 在窗口内容根部应用主题，跟随系统时传 nil。活动语言在进程生命周期内固定，语言 Picker 使用待确认值；取消不写偏好，确认先等待本地保存，保存或重启准备失败回退。Mac 由 `AppLanguageRestart` 等待旧进程正常退出后通过 LaunchServices 重新打开同一 App；退出保存失败会取消重启助手并回退语言，不使用并行实例。iOS/iPadOS 确认后手动重新打开，当前界面仍显示活动语言。正常开发／正式进程在启动时同步应用域 `AppleLanguages`，Mac 重启同时携带目标语言参数，供原生菜单采用。测试重启通过 Debug 专用 `-YoursUITestSession <UUID>` 保留同一隔离资料库和偏好；参数缺值、UUID 无效或与环境变量冲突时拒绝打开，Release 忽略该参数。隔离测试 suite 不改日常应用域的系统菜单语言。
+`preferredColorScheme` 在窗口内容根部应用主题，跟随系统时传 nil。活动语言在进程生命周期内固定，语言 Picker 使用待确认值；取消不写偏好，确认先等待本地保存，保存或重启准备失败回退。Mac 由 `AppLanguageRestart` 等待旧进程正常退出后通过 LaunchServices 重新打开同一 App；退出保存失败会取消重启助手并回退语言，不使用并行实例。iOS/iPadOS 确认后手动重新打开，当前界面仍显示活动语言。正常开发／正式进程在启动时同步应用域 `AppleLanguages`，Mac 重启后从已保存偏好采用目标语言。测试重启使用绑定 bundle 路径、60 秒有效且读取后删除的一次性 UUID 凭据，保留同一隔离资料库和偏好；仅 macOS Debug App 读取，Release 与 Swift Package 忽略。隔离测试 suite 不改日常应用域的系统菜单语言。
 
 `Resources/zh-Hans.lproj` 和 `Resources/en.lproj` 维护同键 Localizable.strings，并注册到 Xcode 与 Swift Package。所有资源键使用稳定的英文语义标识（如 `note.create`、`settings.title`），不以中英文显示文案作为 key。SwiftUI 静态文案直接传入语义 key 并使用 locale 环境；原生菜单和错误通过 `L10n.string` 读取活动语言资源。带参数文案集中在 `L10n` 的具名方法中，通过显式 key 和 `defaultValue` 的类型化插值解析；中文 defaultValue 仅提供参数及缺失资源时的回退，不是查询 key。字符数和记录数的 `.stringsdict` 使用相同语义 key，保留英文单复数规则。独立宿主的表格和代码操作栏显式注入 locale。用户内容不作为本地化 key；带参数的提示整体翻译，避免拼接句子。添加文案时同步两份资源并检查参数类型与顺序。
 

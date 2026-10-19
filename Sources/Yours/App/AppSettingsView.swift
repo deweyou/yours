@@ -240,7 +240,7 @@ struct AppSettingsView: View {
                 },
                 restart: {
                     #if os(macOS)
-                        try AppLanguageRestart.restart(language: language)
+                        try AppLanguageRestart.restart()
                     #endif
                 })
         } catch { languageError = error.localizedDescription }

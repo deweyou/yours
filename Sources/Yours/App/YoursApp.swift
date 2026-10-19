@@ -59,9 +59,6 @@ struct YoursApp: App {
                     .onAppear {
                         appDelegate.store = store
                         appDelegate.preferences = preferences
-                        if UserDefaults.standard.bool(forKey: "YoursLanguageRelaunch") {
-                            NSApplication.shared.activate()
-                        }
                     }
                 #endif
                 .tint(AppTheme.accent)

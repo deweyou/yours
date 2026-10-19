@@ -8,22 +8,20 @@
         static func cancel() {
             if let pendingHelper, pendingHelper.isRunning { pendingHelper.terminate() }
             pendingHelper = nil
+            // Expiration also prevents stale tokens being reused if cleanup fails.
+            try? AppStorage.current.cancelTestRelaunch(bundleURL: Bundle.main.bundleURL)
         }
 
-        static func restart(language: AppPreferences.Language) throws {
+        static func restart() throws {
             let app = Bundle.main.bundleURL
             guard app.pathExtension == "app" else { throw CocoaError(.executableNotLoadable) }
+            // Saved preferences select the language. The one-shot token keeps
+            // UI-test storage isolated when LaunchServices drops launch arguments.
+            try AppStorage.current.prepareTestRelaunch(bundleURL: app)
             // Wait for the old process to exit before reopening this same app.
             // Arguments are passed separately, never interpolated into shell code.
-            // LaunchServices can retain the exited instance briefly and ignore
-            // new arguments. Only after the PID exits, force a fresh launch so
-            // the selected language and isolated test session reach main().
-            // A cancelled termination leaves this helper to time out without
-            // opening another instance or writing to the same library twice.
             let helper = Process()
             helper.executableURL = URL(fileURLWithPath: "/bin/sh")
-            let testSession: String
-            if case .test(let session) = AppStorage.current.profile { testSession = session.uuidString } else { testSession = "" }
             helper.arguments = [
                 "-c",
                 """
@@ -33,26 +31,14 @@
                     /bin/sleep 0.1
                     attempts=$((attempts + 1))
                 done
-                if [ -n "$4" ]; then
-                    set -x
-                    exec /usr/bin/open -n --env "YOURS_UI_TEST_SESSION=$4" "$2" --args -AppleLanguages "($3)" -ApplePersistenceIgnoreState YES -YoursLanguageRelaunch YES -YoursUITestSession "$4"
-                else
-                    exec /usr/bin/open -n "$2" --args -AppleLanguages "($3)" -ApplePersistenceIgnoreState YES -YoursLanguageRelaunch YES
-                fi
+                exec /usr/bin/open "$2"
                 """,
-                "yours-language-restart", String(ProcessInfo.processInfo.processIdentifier), app.path, language.rawValue,
-                testSession,
+                "yours-language-restart", String(ProcessInfo.processInfo.processIdentifier), app.path,
             ]
-            #if DEBUG
-                if case .test = AppStorage.current.profile {
-                    let trace = AppStorage.current.directory.appendingPathComponent("language-restart.log")
-                    try JSONEncoder().encode(helper.arguments).write(to: trace, options: .atomic)
-                    let output = try FileHandle(forWritingTo: trace)
-                    try output.seekToEnd()
-                    helper.standardError = output
-                }
-            #endif
-            try helper.run()
+            do { try helper.run() } catch {
+                cancel()
+                throw error
+            }
             pendingHelper = helper
             NSApplication.shared.terminate(nil)
         }
