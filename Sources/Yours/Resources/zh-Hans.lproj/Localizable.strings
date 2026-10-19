@@ -13,7 +13,6 @@
 "markdown.example.inline" = "`行内代码`  [链接](https://example.com)";
 "format.underline" = "下划线";
 "settings.theme" = "主题";
-"settings.theme.description" = "主题立即生效，不改变文档内容。";
 "note.empty.title" = "从一条记录开始";
 "format.code_block" = "代码块";
 "code.format.changed" = "代码或语言已修改，请重新格式化。";
@@ -146,8 +145,6 @@
 "settings.open" = "设置…";
 "format.menu.help" = "设置文字格式";
 "settings.language" = "语言";
-"settings.language.saved" = "语言已保存，下次启动 Yours 时生效。";
-"settings.language.restart_required" = "语言更改将在下次启动时生效，包括应用菜单。";
 "code.format.check_syntax" = "请检查代码语法。";
 "code.format.syntax_preserved" = "请检查代码语法，原文已保留。";
 "settings.theme.system" = "跟随系统";
@@ -215,3 +212,27 @@
 
 "rendered.formula_hint" = "Esc 或点击外部完成编辑";
 "rendered.done" = "完成";
+"settings.data" = "数据与同步";
+"sync.toggle" = "iCloud 同步";
+"sync.not_configured" = "此版本暂不支持 iCloud 同步。";
+"sync.account_unavailable" = "iCloud 暂不可用，请检查系统中的 Apple 账户。文档仍保存在本机。";
+"sync.account_changed" = "Apple 账户已变更，已暂停同步以避免混合不同账户的数据。请切回原账户。";
+"sync.invalid_library" = "同步数据无法读取，原有文档已保留。";
+"sync.local_storage" = "请先解决本地保存错误，再重试同步。";
+"sync.conflict_retry" = "另一台设备刚刚更新了内容，请重试同步。";
+"sync.syncing" = "正在同步…";
+"sync.last_success" = "最近同步：";
+"sync.waiting" = "等待同步";
+"sync.editor_open" = "另一台设备修改了正在打开的文档，离开编辑页后继续同步。";
+"sync.now" = "立即同步";
+"storage.profile.production" = "当前资料库：个人文档";
+"storage.profile.development" = "当前资料库：开发预览";
+"storage.profile.test" = "当前资料库：自动测试";
+"settings.language.confirm_title" = "切换语言？";
+"settings.language.confirm" = "确认切换";
+"settings.language.restart_confirm" = "重启并切换";
+"settings.language.restart_message" = "将保存文档并重新启动 Yours。取消则保留当前语言。";
+"settings.language.reopen_message" = "确认后，请关闭并重新打开 Yours 以使用新语言。取消则保留当前语言。";
+"settings.language.failed" = "未能切换语言";
+"sync.help" = "在同一 Apple 账户的设备间同步文档。关闭同步后，本机和 iCloud 中的文档都会保留。";
+"sync.off" = "文档保存在本机。";

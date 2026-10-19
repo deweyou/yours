@@ -6,3 +6,6 @@ xcuserdata/
 .deweyou/
 __pycache__/
 *.pyc
+
+# Personal CloudKit signing configuration
+Config/CloudKit.local.xcconfig

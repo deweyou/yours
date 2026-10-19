@@ -16,7 +16,7 @@ enum CodeStyleAttribute: CodableAttributedStringKey {
 }
 
 struct NoteAttributeScope: AttributeScope {
-    let swiftUI: AttributeScopes.SwiftUIAttributes
+    let swiftUI: NoteSwiftUIAttributes
     let table: TableAttribute
     let renderedContent: RenderedContentAttribute
     let codeLanguage: CodeLanguageAttribute
@@ -2186,7 +2186,9 @@ enum NativeTextAttributes {
             if let style = attributes[.yoursCodeStyle] as? String { result[range][CodeStyleAttribute.self] = style }
             if let font = attributes[.font] as? PlatformFont {
                 let original = (attributes[.yoursStoredFont] as? PlatformFont).map { $0 as CTFont }
-                result[range].font = Font(storedFont(font as CTFont, original: original))
+                let stored = storedFont(font as CTFont, original: original)
+                let name = CTFontCopyPostScriptName(stored) as String
+                result[range].font = name.hasPrefix("SourceHanSerif") ? .custom(name, fixedSize: CTFontGetSize(stored)) : Font(stored)
             }
             if let link = attributes[.link] as? URL {
                 result[range].link = link

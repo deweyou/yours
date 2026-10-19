@@ -8,6 +8,9 @@
 | 查看 Markdown 全集与实际效果 | [效果手册](examples/markdown-showcase.md) | Mac 复制正文粘贴、移动端可导入；已支持能力与兼容性对照分开标注 |
 | 本期做什么、未来做什么 | [产品](product.md)、[本期规格](specs/first-release.md) | 用户本次范围 |
 | 代码在哪里、数据如何保存 | [架构](architecture.md) | `Sources/Yours` |
+| iCloud、开发数据隔离与旧测试文档在哪里 | [存储与同步](storage-and-sync.md) | `AppStorage`、`CloudLibrarySync`、签名授权 |
+| CloudKit 占谁的空间、正式环境需要准备什么 | [概念与空间归属](storage-and-sync.md#cloudkit-概念与空间归属)、[正式环境准备](storage-and-sync.md#正式环境准备尚未完成) | 私有数据库、容器绑定、schema 部署与 App 自动建记录 |
+| 图片、附件如何按需下载与节省本地空间 | [后续空间管理方向](storage-and-sync.md#图片与附件的空间管理已确认方向尚未实现) | 尚未实现，随图片与附件支持一并完成；正文保留本地 |
 | Mac 底板与双栏卡片、跨设备布局、正文样式和原生交互怎么设计 | [设计](../DESIGN.md) | 当前 App、[原生设计规则](../.agents/rules/apple-native-design.md) |
 | App 品牌图标定稿、SVG 编辑与素材生成 | [图标设计](../DESIGN.md#app-品牌图标已确认设计) | [制作说明](../design/AppIcon/README.md)、[主 SVG](../design/AppIcon/yours-mark.svg) |
 | Apple 原生 UI 规则、同心圆角、iOS / iPadOS / 折叠形态与视觉走查 | [设计规则](../.agents/rules/apple-native-design.md) | [设计基线](../DESIGN.md)、[验证](verification.md) |

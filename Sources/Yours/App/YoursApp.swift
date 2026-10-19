@@ -3,23 +3,29 @@ import SwiftUI
 @main
 struct YoursApp: App {
     @State private var store: NoteStore
-    @State private var preferences = AppPreferences()
+    @State private var preferences: AppPreferences
+    @State private var cloudSync: CloudLibrarySync
     @Environment(\.scenePhase) private var scenePhase
 
     #if os(macOS)
+        @NSApplicationDelegateAdaptor(YoursApplicationDelegate.self) private var appDelegate
         @FocusedValue(\.workspaceNavigation) private var navigation
         @FocusedValue(\.markdownActions) private var markdownActions
     #endif
 
     init() {
+        let storage = AppStorage.current
+        let preferences = AppPreferences()
+        // Native menus use the application defaults on subsequent launches.
+        // Test suites retain their own language without touching this domain.
+        switch storage.profile {
+        case .test: break
+        case .production, .development:
+            UserDefaults.standard.set([preferences.activeLanguage.rawValue], forKey: "AppleLanguages")
+        }
         #if DEBUG
-            // A UUID names an isolated test store; never accept an arbitrary data path.
-            if let value = ProcessInfo.processInfo.environment["YOURS_UI_TEST_SESSION"],
-                let session = UUID(uuidString: value)
-            {
-                let directory = URL.applicationSupportDirectory
-                    .appendingPathComponent("YoursUITests", isDirectory: true)
-                    .appendingPathComponent(session.uuidString, isDirectory: true)
+            if case .test = storage.profile {
+                let directory = storage.directory
                 if let count = ProcessInfo.processInfo.environment["YOURS_UI_TEST_GALLERY_COUNT"].flatMap(Int.init),
                     [1_000, 10_000].contains(count),
                     !FileManager.default.fileExists(atPath: directory.appendingPathComponent("notes.json").path)
@@ -38,20 +44,36 @@ struct YoursApp: App {
                         preconditionFailure("Cannot prepare isolated gallery fixture: \(error)")
                     }
                 }
-                _store = State(initialValue: NoteStore(directory: directory))
-                return
             }
         #endif
-        _store = State(initialValue: NoteStore())
+        let store = NoteStore(directory: storage.directory)
+        _store = State(initialValue: store)
+        _preferences = State(initialValue: preferences)
+        _cloudSync = State(initialValue: CloudLibrarySync(store: store, preferences: preferences, storage: storage))
     }
 
     var body: some Scene {
         WindowGroup {
             WorkspaceView(store: store)
+                #if os(macOS)
+                    .onAppear {
+                        appDelegate.store = store
+                        appDelegate.preferences = preferences
+                    }
+                #endif
                 .tint(AppTheme.accent)
                 .environment(preferences)
+                .environment(cloudSync)
                 .environment(\.locale, preferences.activeLanguage.locale)
                 .preferredColorScheme(preferences.theme.colorScheme)
+                .task(id: preferences.iCloudSyncEnabled && scenePhase == .active) {
+                    guard preferences.iCloudSyncEnabled, scenePhase == .active else { return }
+                    while !Task.isCancelled {
+                        await cloudSync.synchronize()
+                        do { try await Task.sleep(for: .seconds(30)) } catch { return }
+                    }
+                }
+                .onChange(of: preferences.iCloudSyncEnabled) { _, _ in cloudSync.stop() }
                 .onChange(of: scenePhase) { _, phase in
                     guard phase != .active else { return }
                     Task { await store.flushPendingSave() }
@@ -83,3 +105,27 @@ struct YoursApp: App {
         #endif
     }
 }
+
+#if os(macOS)
+    @MainActor
+    final class YoursApplicationDelegate: NSObject, NSApplicationDelegate {
+        weak var store: NoteStore?
+        weak var preferences: AppPreferences?
+
+        func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+            guard let store, store.hasUnsavedChanges else { return .terminateNow }
+            Task {
+                store.retrySave()
+                await store.flushPendingSave()
+                // A failed save leaves the app open with its persistent error and editable content.
+                let saved = !store.hasUnsavedChanges && store.saveError == nil
+                if !saved {
+                    AppLanguageRestart.cancel()
+                    preferences?.cancelPendingLanguageChange()
+                }
+                sender.reply(toApplicationShouldTerminate: saved)
+            }
+            return .terminateLater
+        }
+    }
+#endif

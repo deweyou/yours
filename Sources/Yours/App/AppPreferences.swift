@@ -23,7 +23,11 @@ final class AppPreferences {
     }
 
     private let defaults: UserDefaults
+    private var previousLanguage: Language?
     let activeLanguage: Language
+    var iCloudSyncEnabled: Bool {
+        didSet { defaults.set(iCloudSyncEnabled, forKey: "sync.icloud.enabled") }
+    }
     var theme: Theme {
         didSet { defaults.set(theme.rawValue, forKey: "appearance.theme") }
     }
@@ -37,23 +41,41 @@ final class AppPreferences {
 
     init(defaults: UserDefaults = PreferenceStorage.defaults, activeLanguage: Language = L10n.language) {
         self.defaults = defaults
+        iCloudSyncEnabled = defaults.bool(forKey: "sync.icloud.enabled")
         self.activeLanguage = activeLanguage
         theme = Theme(rawValue: defaults.string(forKey: "appearance.theme") ?? "") ?? .system
         language = Language(rawValue: defaults.string(forKey: "appearance.language") ?? "") ?? activeLanguage
+    }
+
+    func changeLanguage(to language: Language, save: () async -> Bool, restart: () throws -> Void) async throws {
+        guard language != self.language else { return }
+        guard await save() else { throw LibrarySyncError.localStorage }
+        previousLanguage = self.language
+        self.language = language
+        defaults.synchronize()
+        do {
+            try restart()
+        } catch {
+            cancelPendingLanguageChange()
+            throw error
+        }
+    }
+
+    func cancelPendingLanguageChange() {
+        guard let previousLanguage else { return }
+        language = previousLanguage
+        self.previousLanguage = nil
+        defaults.synchronize()
     }
 }
 
 enum PreferenceStorage {
     static var defaults: UserDefaults {
-        #if DEBUG
-            if let value = ProcessInfo.processInfo.environment["YOURS_UI_TEST_SESSION"],
-                let session = UUID(uuidString: value),
-                let defaults = UserDefaults(suiteName: "YoursUITests.\(session.uuidString).preferences")
-            {
-                return defaults
-            }
-        #endif
-        return .standard
+        guard let suite = AppStorage.current.preferenceSuite else { return .standard }
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            preconditionFailure("Cannot open isolated preferences.")
+        }
+        return defaults
     }
 }
 

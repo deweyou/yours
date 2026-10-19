@@ -37,7 +37,13 @@ final class YoursUITests: XCTestCase {
 
     override func tearDownWithError() throws {
         if let app {
-            let attachment = XCTAttachment(screenshot: app.screenshot())
+            #if os(macOS)
+                let window = app.windows.firstMatch
+                let screenshot = window.exists ? window.screenshot() : app.screenshot()
+            #else
+                let screenshot = app.screenshot()
+            #endif
+            let attachment = XCTAttachment(screenshot: screenshot)
             attachment.lifetime = .keepAlways
             add(attachment)
             app.terminate()
@@ -165,6 +171,12 @@ final class YoursUITests: XCTestCase {
         }
 
         func testMacEnglishSettingsAndThemeSelection() {
+            app.buttons["workspace-settings"].click()
+            XCTAssertTrue(app.popUpButtons["settings-theme"].waitForExistence(timeout: 5))
+            let chineseSettings = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+            chineseSettings.name = "Settings Chinese"
+            chineseSettings.lifetime = .keepAlways
+            add(chineseSettings)
             app.terminate()
             app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-ApplePersistenceIgnoreState", "YES"]
             app.launch()
@@ -179,6 +191,65 @@ final class YoursUITests: XCTestCase {
             app.menuItems["Light"].click()
             XCTAssertEqual(theme.value as? String, "Light")
             XCTAssertTrue(app.popUpButtons["settings-language"].exists)
+            // The native small macOS switch exposes a toggle button rather than an iOS-style Switch.
+            let cloudToggle = app.descendants(matching: .any)["settings-icloud-sync"].firstMatch
+            XCTAssertTrue(cloudToggle.exists)
+            XCTAssertFalse(cloudToggle.isEnabled, "Automated test sessions must never connect to CloudKit")
+            XCTAssertEqual(cloudToggle.frame.maxX, theme.frame.maxX, accuracy: 1)
+            XCTAssertLessThanOrEqual(cloudToggle.frame.height, theme.frame.height)
+            let profile = app.staticTexts["settings-storage-profile"]
+            XCTAssertTrue(profile.exists)
+            let profileText = profile.label + (profile.value as? String ?? "")
+            XCTAssertTrue(profileText.contains("Automated tests"))
+        }
+
+        func testMacSettingsLanguageConfirmationAndCompactLoading() throws {
+            app.terminate()
+            app.launchEnvironment["YOURS_UI_TEST_SYNC_LOADING"] = "1"
+            app.launch()
+            app.activate()
+            newNote()
+            app.textFields["note-title"].click()
+            app.textFields["note-title"].typeText("Language restart check\n")
+            editor.click()
+            editor.typeText("语言重启验证")
+            app.buttons["workspace-settings"].click()
+            let language = app.popUpButtons["settings-language"]
+            XCTAssertTrue(language.waitForExistence(timeout: 5))
+            let storageProfile = app.staticTexts["settings-storage-profile"]
+            let storageIdentity = try XCTUnwrap(storageProfile.value as? String)
+            let testSession = try XCTUnwrap(app.launchEnvironment["YOURS_UI_TEST_SESSION"])
+            XCTAssertTrue(storageIdentity.hasPrefix(testSession + "|"))
+            let progress = app.descendants(matching: .any)["settings-sync-progress"].firstMatch
+            XCTAssertTrue(progress.exists, app.debugDescription)
+            XCTAssertLessThanOrEqual(progress.frame.height, 16)
+            let loading = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+            loading.name = "Compact sync loading"
+            loading.lifetime = .keepAlways
+            add(loading)
+            language.click()
+            app.menuItems["English"].click()
+            XCTAssertTrue(app.sheets.buttons["settings-language-confirm"].waitForExistence(timeout: 5))
+            app.sheets.buttons["取消"].click()
+            XCTAssertEqual(language.value as? String, "中文")
+            language.click()
+            app.menuItems["English"].click()
+            app.sheets.buttons["settings-language-confirm"].click()
+            XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
+            XCTAssertTrue(app.wait(for: .runningForeground, timeout: 20))
+            app.activate()
+            XCTAssertTrue(app.buttons["workspace-settings"].waitForExistence(timeout: 5))
+            app.buttons["workspace-settings"].click()
+            XCTAssertEqual(app.popUpButtons["settings-language"].value as? String, "English")
+            XCTAssertEqual(app.popUpButtons["settings-theme"].label, "Theme")
+            XCTAssertEqual(
+                storageProfile.value as? String, storageIdentity,
+                "Restart must reopen the same isolated storage root and session")
+            app.buttons["workspace-documents"].click()
+            let savedNote = recordCard(titled: "Language restart check")
+            XCTAssertTrue(savedNote.waitForExistence(timeout: 5))
+            savedNote.click()
+            expectText("语言重启验证")
         }
 
         func testMacCleanWorkspaceAndInbox() {

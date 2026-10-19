@@ -219,7 +219,7 @@
         private var workspaceCard: some View {
             Group {
                 if navigation.destination == .settings {
-                    AppSettingsView()
+                    AppSettingsView(store: store)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if navigation.destination == .home {
                     ContentUnavailableView("navigation.home", systemImage: "house", description: Text("home.empty.description"))

@@ -26,6 +26,48 @@ struct AppPreferencesTests {
         #expect(AppPreferences(defaults: defaults, activeLanguage: .english).theme.colorScheme == nil)
     }
 
+    @Test func languageChangeSavesBeforeRestartAndRollsBackOnFailure() async throws {
+        let suite = "AppPreferencesTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = AppPreferences(defaults: defaults, activeLanguage: .chinese)
+        var saved = false
+        var restarted = false
+        try await preferences.changeLanguage(
+            to: .english,
+            save: {
+                saved = true
+                return true
+            },
+            restart: {
+                #expect(saved)
+                #expect(preferences.language == .english)
+                restarted = true
+            })
+        #expect(restarted)
+        #expect(preferences.activeLanguage == .chinese)
+        preferences.cancelPendingLanguageChange()
+        #expect(preferences.language == .chinese)
+        #expect(defaults.stringArray(forKey: "AppleLanguages") == ["zh-Hans"])
+
+        await #expect(throws: (any Error).self) {
+            try await preferences.changeLanguage(
+                to: .english, save: { false },
+                restart: {
+                    Issue.record("Must not restart when saving fails")
+                })
+        }
+        #expect(preferences.language == .chinese)
+        await #expect(throws: (any Error).self) {
+            try await preferences.changeLanguage(
+                to: .english, save: { true },
+                restart: {
+                    throw CocoaError(.executableNotLoadable)
+                })
+        }
+        #expect(preferences.language == .chinese)
+    }
+
     @Test func invalidPreferencesFallBackWithoutTouchingOtherDefaults() throws {
         let suite = "AppPreferencesTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))

@@ -62,7 +62,8 @@ struct BodyTypographyTests {
         #expect(CTFontGetSymbolicTraits(font).contains(.traitBold))
         #expect(CTFontGetSymbolicTraits(font).contains(.traitItalic))
         let stored = NativeTextAttributes.rich(native)
-        #expect(try #require(stored.font).resolve(in: context).isMonospaced)
+        let storedResolved = try #require(stored.font).resolve(in: context)
+        #expect(storedResolved.isMonospaced, "Stored font: \(CTFontCopyPostScriptName(storedResolved.ctFont))")
         #expect(stored[CodeStyleAttribute.self] == style)
     }
 
@@ -96,7 +97,7 @@ struct BodyTypographyTests {
         #expect((CTFontGetMatrix(display).c != 0) == (emphasis & 2 != 0))
         let restored = NativeTextAttributes.rich(native)
         let original = try #require(restored.font).resolve(in: context).ctFont
-        #expect(CTFontCopyPostScriptName(original) == CTFontCopyPostScriptName(fallback))
+        #expect(CTFontCopyPostScriptName(original) as String == CTFontCopyPostScriptName(fallback) as String)
         #expect(restored[InlineEmphasisAttribute.self] == emphasis)
         #expect(restored[QuoteAttribute.self] == true)
     }

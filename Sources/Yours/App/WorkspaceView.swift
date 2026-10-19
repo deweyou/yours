@@ -70,6 +70,7 @@ struct NoteEditorView: View {
     @State private var didCopyMarkdown = false
     @State private var bodyFocusRequest = 0
     @State private var toast = ToastPresenter()
+    @State private var editorSession = UUID()
     @Environment(\.undoManager) private var undoManager
     @Environment(\.fontResolutionContext) private var fontContext
 
@@ -139,8 +140,15 @@ struct NoteEditorView: View {
         }
         .background(editorCanvasColor)
         .overlay { ToastOverlay(presenter: toast) }
-        .onChange(of: note.id) { _, _ in toast.clear() }
-        .onDisappear { toast.clear() }
+        .onAppear { store.registerEditor(editorSession, noteID: note.id) }
+        .onChange(of: note.id) { _, id in
+            store.registerEditor(editorSession, noteID: id)
+            toast.clear()
+        }
+        .onDisappear {
+            store.unregisterEditor(editorSession)
+            toast.clear()
+        }
         .navigationTitle(note.displayTitle)
         #if os(iOS)
             .toolbar {

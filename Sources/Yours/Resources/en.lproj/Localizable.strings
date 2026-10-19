@@ -13,7 +13,6 @@
 "markdown.example.inline" = "`inline code`  [link](https://example.com)";
 "format.underline" = "Underline";
 "settings.theme" = "Theme";
-"settings.theme.description" = "Theme changes take effect immediately.";
 "note.empty.title" = "Start with a note";
 "format.code_block" = "Code Block";
 "code.format.changed" = "The code or language changed. Please format again.";
@@ -146,8 +145,6 @@
 "settings.open" = "Settings…";
 "format.menu.help" = "Text Formatting";
 "settings.language" = "Language";
-"settings.language.saved" = "Language saved. It will take effect the next time you open Yours.";
-"settings.language.restart_required" = "Language changes, including app menus, take effect the next time you open Yours.";
 "code.format.check_syntax" = "Please check the syntax.";
 "code.format.syntax_preserved" = "Please check the syntax. Your original code has been preserved.";
 "settings.theme.system" = "System";
@@ -215,3 +212,27 @@
 
 "rendered.formula_hint" = "Esc or click outside to finish";
 "rendered.done" = "Done";
+"settings.data" = "Data & Sync";
+"sync.toggle" = "iCloud Sync";
+"sync.not_configured" = "iCloud sync is unavailable in this version.";
+"sync.account_unavailable" = "iCloud is unavailable. Check your Apple Account in System Settings. Documents remain on this device.";
+"sync.account_changed" = "Sync is paused because the Apple Account changed. Switch back to the original account to keep account data separate.";
+"sync.invalid_library" = "Unable to read sync data. Existing documents have been preserved.";
+"sync.local_storage" = "Resolve the local storage error before retrying sync.";
+"sync.conflict_retry" = "Another device just updated the content. Please retry sync.";
+"sync.syncing" = "Syncing…";
+"sync.last_success" = "Last synced: ";
+"sync.waiting" = "Waiting to sync";
+"sync.editor_open" = "Another device changed an open document. Leave its editor to continue syncing safely.";
+"sync.now" = "Sync Now";
+"storage.profile.production" = "Current library: Personal documents";
+"storage.profile.development" = "Current library: Development preview";
+"storage.profile.test" = "Current library: Automated tests";
+"settings.language.confirm_title" = "Change language?";
+"settings.language.confirm" = "Confirm Change";
+"settings.language.restart_confirm" = "Restart and Change";
+"settings.language.restart_message" = "Your documents will be saved before Yours restarts. Cancel to keep the current language.";
+"settings.language.reopen_message" = "After confirming, close and reopen Yours to use the new language. Cancel to keep the current language.";
+"settings.language.failed" = "Unable to Change Language";
+"sync.help" = "Sync documents across devices using the same Apple Account. Turning off sync keeps documents on this device and in iCloud.";
+"sync.off" = "Documents are saved on this device.";

@@ -2,53 +2,20 @@ import Foundation
 import Observation
 import SwiftUI
 
-private struct NoteLibrary: Codable, Sendable {
-    var version = 1
-    var folders: [NoteFolder]
-    var notes: [Note]
-
-    private enum CodingKeys: String, CodingKey {
-        case version, folders, notes
-    }
-
-    init(folders: [NoteFolder] = [], notes: [Note] = []) {
-        self.folders = folders
-        self.notes = notes
-    }
-
-    init(from decoder: any Decoder) throws {
-        // Only an actual array takes the legacy path; malformed envelopes must not
-        // fall back to an empty library and overwrite the original file.
-        if var container = try? decoder.unkeyedContainer() {
-            folders = []
-            notes = []
-            while !container.isAtEnd {
-                notes.append(try container.decode(Note.self))
-            }
-            return
-        }
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        version = try container.decode(Int.self, forKey: .version)
-        guard version == 1 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .version, in: container, debugDescription: "Unsupported note library version.")
-        }
-        folders = try container.decode([NoteFolder].self, forKey: .folders)
-        notes = try container.decode([Note].self, forKey: .notes)
-    }
-}
-
 private actor NotePersistenceWriter {
     private let directory: URL
+    private var writtenRevision = 0
 
     init(directory: URL) {
         self.directory = directory
     }
 
-    func write(_ library: NoteLibrary) throws {
+    func write(_ library: NoteLibrary, revision: Int) throws {
+        guard revision > writtenRevision else { return }
         let encodedNotes = try JSONEncoder().encode(library)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try encodedNotes.write(to: directory.appendingPathComponent("notes.json"), options: .atomic)
+        writtenRevision = revision
     }
 }
 
@@ -66,10 +33,11 @@ final class NoteStore {
     private let writer: NotePersistenceWriter
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private var saveRevision = 0
+    @ObservationIgnored private var editorSessions: [UUID: UUID] = [:]
     private var notesURL: URL { directory.appendingPathComponent("notes.json") }
 
     init(directory: URL? = nil) {
-        let directory = directory ?? URL.applicationSupportDirectory.appendingPathComponent("Yours", isDirectory: true)
+        let directory = directory ?? AppStorage.current.directory
         self.directory = directory
         writer = NotePersistenceWriter(directory: directory)
         reload()
@@ -164,6 +132,34 @@ final class NoteStore {
         updateRichText(id: id, text: text)
     }
 
+    var library: NoteLibrary { NoteLibrary(folders: folders, notes: notes) }
+
+    func registerEditor(_ session: UUID, noteID: UUID) {
+        editorSessions[session] = noteID
+    }
+
+    func unregisterEditor(_ session: UUID) {
+        editorSessions.removeValue(forKey: session)
+    }
+
+    func mergeCloudLibrary(_ remote: NoteLibrary, base: NoteLibrary?) throws {
+        guard loadError == nil else { throw LibrarySyncError.localStorage }
+        try remote.validate()
+        // Native input composition and undo belong to the open editor. Apply incoming edits after it closes.
+        let openIDs = Set(editorSessions.values)
+        for incoming in remote.notes where openIDs.contains(incoming.id) {
+            let local = notes.first { $0.id == incoming.id }
+            let previous = base?.notes.first { $0.id == incoming.id }
+            if incoming != local && incoming != previous { throw LibrarySyncError.editorOpen }
+        }
+        let merged = try library.merging(remote, base: base)
+        guard merged != library else { return }
+        folders = merged.folders
+        notes = merged.notes
+        hasUnsavedChanges = true
+        scheduleSave()
+    }
+
     func retrySave() {
         scheduleSave()
     }
@@ -177,7 +173,7 @@ final class NoteStore {
         saveTask = Task { [weak self, writer] in
             do {
                 try Task.checkCancellation()
-                try await writer.write(snapshot)
+                try await writer.write(snapshot, revision: revision)
                 try Task.checkCancellation()
                 guard let self, self.saveRevision == revision else { return }
                 self.hasUnsavedChanges = false
@@ -192,7 +188,11 @@ final class NoteStore {
     }
 
     func flushPendingSave() async {
-        await saveTask?.value
+        var revision: Int
+        repeat {
+            revision = saveRevision
+            await saveTask?.value
+        } while revision != saveRevision
     }
 
     func reload() {
