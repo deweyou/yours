@@ -18,6 +18,7 @@ enum CodeStyleAttribute: CodableAttributedStringKey {
 struct NoteAttributeScope: AttributeScope {
     let swiftUI: AttributeScopes.SwiftUIAttributes
     let table: TableAttribute
+    let renderedContent: RenderedContentAttribute
     let codeLanguage: CodeLanguageAttribute
     let codeStyle: CodeStyleAttribute
     let paragraphStyle: ParagraphStyleAttribute
@@ -30,6 +31,7 @@ struct NoteAttributeScope: AttributeScope {
 extension NSAttributedString.Key {
     static let yoursStoredFont = NSAttributedString.Key("yours.storedFont")
     static let yoursInlineEmphasis = NSAttributedString.Key(InlineEmphasisAttribute.name)
+    static let yoursRenderedContent = NSAttributedString.Key(RenderedContentAttribute.name)
     static let yoursTable = NSAttributedString.Key(TableAttribute.name)
     static let yoursCodeLanguage = NSAttributedString.Key(CodeLanguageAttribute.name)
     static let yoursSyntaxColor = NSAttributedString.Key("yours.syntaxColor")
@@ -793,7 +795,7 @@ final class CodeLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     }
 
     #if os(macOS)
-        private func stableBaselineOffset(fontSize: CGFloat, lineHeight: CGFloat) -> CGFloat {
+        func stableBaselineOffset(fontSize: CGFloat, lineHeight: CGFloat) -> CGFloat {
             let key = BaselineKey(fontSize: fontSize, lineHeight: lineHeight)
             if let cached = baselineOffsets[key] { return cached }
             let style = NSMutableParagraphStyle()
@@ -916,10 +918,16 @@ final class CodeLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
             let spacing = interLineSpacing(for: characters)
             let paragraph = storage.attribute(.paragraphStyle, at: character, effectiveRange: nil) as? NSParagraphStyle
             let codeStyle = storage.attribute(.yoursCodeStyle, at: character, effectiveRange: nil) as? String
-            let hasAttachment = storage.attribute(.attachment, at: character, effectiveRange: nil) != nil
+            var hasAttachment = false
+            storage.enumerateAttribute(.attachment, in: characters) { value, _, stop in
+                if value != nil {
+                    hasAttachment = true
+                    stop.pointee = true
+                }
+            }
             let font = storage.attribute(.font, at: character, effectiveRange: nil) as? PlatformFont
             let stableContentHeight: CGFloat?
-            if let maximum = paragraph?.maximumLineHeight, maximum > 0 {
+            if !hasAttachment, let maximum = paragraph?.maximumLineHeight, maximum > 0 {
                 stableContentHeight = maximum
             } else if !hasAttachment, codeStyle?.hasPrefix("block:") != true, let font {
                 // AppKit can temporarily drop the paragraph's maximum line height
@@ -1905,9 +1913,14 @@ enum NativeTextAttributes {
                 // soon as a CJK fallback glyph appears, which visibly moves the
                 // caret and following content while typing. Attachments stay
                 // unconstrained because their height belongs to their content.
-                if text.attribute(.attachment, at: location, effectiveRange: nil) == nil {
-                    paragraph.maximumLineHeight = stableLineHeight
+                var containsAttachment = false
+                text.enumerateAttribute(.attachment, in: range) { value, _, stop in
+                    if value != nil {
+                        containsAttachment = true
+                        stop.pointee = true
+                    }
                 }
+                if !containsAttachment { paragraph.maximumLineHeight = stableLineHeight }
             }
             paragraph.lineSpacing = DocumentTypography.bodyLineSpacing
             paragraph.paragraphSpacing = DocumentTypography.bodyParagraphSpacing
@@ -2035,6 +2048,10 @@ enum NativeTextAttributes {
                 // Compatibility with documents saved before code roles were persisted.
                 attributes[.yoursCodeStyle] = run.backgroundColor == Color.secondary.opacity(0.1) ? "legacy-block" : "inline"
             }
+            if let content = run[RenderedContentAttribute.self], String(text[run.range].characters) == "\u{FFFC}" {
+                attributes[.yoursRenderedContent] = try? JSONEncoder().encode(content)
+                attributes[.attachment] = RenderedContentAttachment(content: content)
+            }
             if let table = run[TableAttribute.self], String(text[run.range].characters) == "\u{FFFC}" {
                 attributes[.yoursTable] = try? JSONEncoder().encode(table)
                 attributes[.attachment] = TableTextAttachment(table: table)
@@ -2148,6 +2165,12 @@ enum NativeTextAttributes {
         var result = AttributedString(text.string)
         text.enumerateAttributes(in: NSRange(location: 0, length: text.length)) { attributes, nsRange, _ in
             guard let range = Range<AttributedString.Index>(nsRange, in: result) else { return }
+            if let encoded = attributes[.yoursRenderedContent] as? Data,
+                text.attributedSubstring(from: nsRange).string == "\u{FFFC}",
+                let content = try? JSONDecoder().decode(RenderedContent.self, from: encoded)
+            {
+                result[range][RenderedContentAttribute.self] = content
+            }
             if let encoded = attributes[.yoursTable] as? Data,
                 text.attributedSubstring(from: nsRange).string == "\u{FFFC}",
                 let table = try? JSONDecoder().decode(TableData.self, from: encoded)

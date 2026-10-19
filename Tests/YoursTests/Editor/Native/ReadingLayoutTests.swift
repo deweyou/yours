@@ -1299,6 +1299,7 @@ import Testing
                 ("", "\nNext"), ("Before\n", "\nNext"), ("Before\u{2028}", "\nNext"), ("", ""), ("Before\n", ""), ("Before\u{2028}", ""),
             ] {
                 var rects: [CGRect] = []
+                var visibleRects: [CGRect] = []
                 for content in ["", "x", "\u{4E2D}", ""] {
                     let context = EnvironmentValues().fontResolutionContext
                     let storage = NSTextStorage(
@@ -1314,7 +1315,14 @@ import Testing
                         at: 0, effectiveRange: nil)
                     view.setSelectedRange(NSRange(location: prefix.utf16.count, length: 0))
                     layout.ensureLayout(for: container)
-                    rects.append(view.firstRect(forCharacterRange: view.selectedRange(), actualRange: nil))
+                    let screen = view.firstRect(forCharacterRange: view.selectedRange(), actualRange: nil)
+                    rects.append(screen)
+                    let local = view.convert(window.convertFromScreen(screen), from: nil)
+                    visibleRects.append(view.visibleInsertionPointRect(local))
+                }
+                for visible in visibleRects {
+                    #expect(abs(visible.minY - visibleRects[0].minY) < 0.5)
+                    #expect(abs(visible.height - visibleRects[0].height) < 0.5)
                 }
                 for rect in rects {
                     // Screen-space maxY is the top. Native final-line font leading

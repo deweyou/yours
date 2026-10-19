@@ -105,7 +105,8 @@ enum EditorCommandEditing {
         let paragraph = source.paragraphRange(for: range)
         guard let block = Range<AttributedString.Index>(paragraph, in: text) else { return false }
         let runs = text[block].runs
-        if runs.contains(where: { $0[TableAttribute.self] != nil }) { return false }
+        if runs.contains(where: { $0[TableAttribute.self] != nil || $0[RenderedContentAttribute.self]?.isBlock == true }) { return false }
+        if text[selected].runs.contains(where: { $0[RenderedContentAttribute.self] != nil }) { return false }
         let code = runs.filter { $0[CodeStyleAttribute.self]?.hasPrefix("block:") == true }
         if !code.isEmpty {
             guard action == .paragraph("body"), !selected.isEmpty,

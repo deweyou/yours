@@ -142,7 +142,8 @@ private struct EditorControlsView: View {
         #if os(iOS)
             .buttonStyle(EditorTouchButtonStyle())
         #endif
-        .padding(isSelectionToolbar ? 3 : 8)
+        .padding(.vertical, isSelectionToolbar ? 3 : 8)
+        .padding(.horizontal, state.isSlash && state.detail == nil ? 0 : isSelectionToolbar ? 3 : 8)
         #if os(macOS)
             .glassEffect(.regular, in: .rect(cornerRadius: 12))
         #endif
@@ -195,7 +196,9 @@ private struct EditorControlsView: View {
                     }
                 }
             }
-            .frame(width: 264, height: min(state.maximumMenuHeight, CGFloat(max(1, state.commands.count)) * 44 + 35))
+            .contentMargins(.horizontal, 8, for: .scrollContent)
+            .contentMargins(.trailing, 2, for: .scrollIndicators)
+            .frame(width: 280, height: min(state.maximumMenuHeight, CGFloat(max(1, state.commands.count)) * 44 + 35))
             .onChange(of: state.highlighted) { _, index in
                 if state.commands.indices.contains(index) { proxy.scrollTo(state.commands[index].id) }
             }

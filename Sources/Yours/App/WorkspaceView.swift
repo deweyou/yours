@@ -227,6 +227,16 @@ struct NoteEditorView: View {
             }
             .safeAreaInset(edge: .top, spacing: 0) { formattingBar.disabled(isTitleFocused) }
         #endif
+        #if os(macOS)
+            .focusedSceneValue(
+                \.markdownActions,
+                MarkdownActions(
+                    copy: copyMarkdown,
+                    export: {
+                        exportDocument = MarkdownFile(source: MarkdownFormatting.serialize(richText, context: fontContext))
+                        showsExport = true
+                    }))
+        #endif
         .fileExporter(
             isPresented: $showsExport, document: exportDocument, contentType: MarkdownFile.contentType,
             defaultFilename: note.markdownFilename
@@ -425,3 +435,19 @@ struct NoteEditorView: View {
         isFocused = true
     }
 }
+
+#if os(macOS)
+    struct MarkdownActions {
+        var copy: () -> Void
+        var export: () -> Void
+    }
+    private struct MarkdownActionsKey: FocusedValueKey {
+        typealias Value = MarkdownActions
+    }
+    extension FocusedValues {
+        var markdownActions: MarkdownActions? {
+            get { self[MarkdownActionsKey.self] }
+            set { self[MarkdownActionsKey.self] = newValue }
+        }
+    }
+#endif

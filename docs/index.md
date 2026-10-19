@@ -12,6 +12,7 @@
 | App 品牌图标定稿、SVG 编辑与素材生成 | [图标设计](../DESIGN.md#app-品牌图标已确认设计) | [制作说明](../design/AppIcon/README.md)、[主 SVG](../design/AppIcon/yours-mark.svg) |
 | Apple 原生 UI 规则、同心圆角、iOS / iPadOS / 折叠形态与视觉走查 | [设计规则](../.agents/rules/apple-native-design.md) | [设计基线](../DESIGN.md)、[验证](verification.md) |
 | 按钮、链接和可点击区域的 pointer 规则 | [光标设计约定](../DESIGN.md#可点击区域的光标全局约定) | [指针验收](verification.md#可点击区域的指针验收) |
+| 公式与 Mermaid 的 Markdown 示例 | [样本](examples/math-and-mermaid.md)、[架构](architecture.md#公式与-mermaid) | [验证](verification.md#公式与-mermaid-回归) |
 | 如何验证编辑器改动 | [验证](verification.md) | 受影响测试和目标平台 |
 | Slash 搜索、选区格式与链接浮层 | [设计规则](../DESIGN.md#slash-与选区工具栏)、[命令边界](architecture.md#编辑命令与临时浮层) | [输入与选区验收](verification.md#slash-与选区格式回归) |
 | 如何规划任务、记录证据、创建 PR | [开发流程](development.md) | `harness.yaml` 与安装版 Harness skill |

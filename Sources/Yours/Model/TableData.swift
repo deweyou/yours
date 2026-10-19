@@ -123,7 +123,7 @@ struct TableData: Codable, Hashable, Sendable, Identifiable {
 
     static func plainText(in text: AttributedString) -> String {
         text.runs.map { run in
-            run[TableAttribute.self]?.plainText ?? String(text[run.range].characters)
+            run[TableAttribute.self]?.plainText ?? run[RenderedContentAttribute.self]?.source ?? String(text[run.range].characters)
         }.joined()
     }
 }

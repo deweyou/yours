@@ -8,6 +8,7 @@ struct YoursApp: App {
 
     #if os(macOS)
         @FocusedValue(\.workspaceNavigation) private var navigation
+        @FocusedValue(\.markdownActions) private var markdownActions
     #endif
 
     init() {
@@ -64,6 +65,12 @@ struct YoursApp: App {
                     Button(L10n.string("settings.open")) { navigation?.select(.settings) }
                     .keyboardShortcut(",", modifiers: .command)
                     .disabled(navigation == nil)
+                }
+                CommandGroup(after: .importExport) {
+                    Button(L10n.string("markdown.copy")) { markdownActions?.copy() }
+                    .disabled(markdownActions == nil)
+                    Button(L10n.string("markdown.export")) { markdownActions?.export() }
+                    .disabled(markdownActions == nil)
                 }
                 CommandGroup(replacing: .newItem) {
                     Button(L10n.string("note.create"), systemImage: "square.and.pencil") {

@@ -104,6 +104,32 @@
             }
         }
 
+        @Test(arguments: ["正文", "**加粗**", "*斜体*", "`代码`", "- 项目", "> 引用", "# 标题"])
+        func returnResetsInlineStylesBeforeFollowingInput(markdown: String) throws {
+            var source = MarkdownFormatting.render(markdown)
+            source.underlineStyle = .single
+            source.strikethroughStyle = .single
+            let (view, coordinator) = editor(source)
+            view.delegate = coordinator
+            let before = try #require(view.textStorage).attributedSubstring(from: NSRange(location: 0, length: view.string.utf16.count))
+            view.insertText("\n", replacementRange: view.selectedRange())
+            coordinator.update(coordinator.parent)
+            #expect(view.typingAttributes[.underlineStyle] == nil)
+            #expect(view.typingAttributes[.strikethroughStyle] == nil)
+            #expect(view.typingAttributes[.link] == nil)
+            #expect(view.typingAttributes[.yoursCodeStyle] == nil)
+            #expect((view.typingAttributes[.yoursInlineEmphasis] as? Int ?? 0) == 0)
+            view.insertText("新文字", replacementRange: view.selectedRange())
+            let storage = try #require(view.textStorage)
+            let inserted = (view.string as NSString).range(of: "新文字")
+            #expect(storage.attribute(.underlineStyle, at: inserted.location, effectiveRange: nil) == nil)
+            #expect(storage.attribute(.strikethroughStyle, at: inserted.location, effectiveRange: nil) == nil)
+            #expect((storage.attribute(.yoursInlineEmphasis, at: inserted.location, effectiveRange: nil) as? Int ?? 0) == 0)
+            #expect(
+                NativeTextAttributes.rich(storage.attributedSubstring(from: NSRange(location: 0, length: before.length)))
+                    == NativeTextAttributes.rich(before))
+        }
+
         @Test func backspaceOnEmptyFirstHeadingReturnsToBody() {
             let (view, coordinator) = editor(MarkdownFormatting.render("# 标题"))
             view.delegate = coordinator
@@ -420,11 +446,14 @@
             coordinator.update(coordinator.parent)
             layout.ensureLayout(for: container)
             let emptyCaret = view.firstRect(forCharacterRange: NSRange(location: start, length: 0), actualRange: nil)
+            let emptyVisible = view.visibleInsertionPointRect(view.convert(window.convertFromScreen(emptyCaret), from: nil))
             let before = try #require(view.typingAttributes[.paragraphStyle] as? NSParagraphStyle)
             view.insertText("1", replacementRange: view.selectedRange())
             coordinator.update(coordinator.parent)
             layout.ensureLayout(for: container)
             let filledCaret = view.firstRect(forCharacterRange: NSRange(location: start, length: 0), actualRange: nil)
+            let filledVisible = view.visibleInsertionPointRect(view.convert(window.convertFromScreen(filledCaret), from: nil))
+            #expect(abs(emptyVisible.minY - filledVisible.minY) < 0.5)
             let after = try #require(storage.attribute(.paragraphStyle, at: start, effectiveRange: nil) as? NSParagraphStyle)
             #expect(before.paragraphSpacingBefore == after.paragraphSpacingBefore)
             #expect(abs(emptyCaret.minY - filledCaret.minY) < 0.5)
@@ -1107,12 +1136,16 @@
                     <= layout.lineFragmentRect(forGlyphAt: blankGlyph, effectiveRange: nil).minY)
         }
 
-        @Test func backspaceOnEmptyQuoteContinuationMergesParagraphs() {
+        @Test func backspaceOnEmptyQuoteContinuationExitsBeforeMergingParagraphs() {
             let (view, coordinator) = editor(MarkdownFormatting.render("> First\n> "))
             view.delegate = coordinator
             view.setSelectedRange(NSRange(location: view.string.utf16.count, length: 0))
 
             #expect(view.string == "First\n")
+            view.doCommand(by: #selector(NSResponder.deleteBackward(_:)))
+            #expect(view.string == "First\n")
+            #expect(view.typingAttributes[.yoursQuote] == nil)
+            #expect(view.selectedRange() == NSRange(location: view.string.utf16.count, length: 0))
             view.doCommand(by: #selector(NSResponder.deleteBackward(_:)))
             #expect(view.string == "First")
             #expect(view.selectedRange() == NSRange(location: view.string.utf16.count, length: 0))

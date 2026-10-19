@@ -132,3 +132,11 @@ _Last updated: 2026-09-28 — 记录正文显示字体的可逆桥接与资源�
 `AppTheme.documentBody` / `documentHeading` 为按外观与对比度解析的原生动态颜色，供 SwiftUI 标题、表格和原生正文共用。`NativeTextAttributes.rich` 排除这些默认显示色，段落角色切换重新选择默认色；显式自定义颜色不参与主题投影。
 
 _Last updated: 2026-09-28 — 补充 Slash 与选区格式入口、共享事务和验证边界。Evidence: `EditorCommands.swift`, `NativeRichTextEditor.swift`, `EditorCommandContractTests.swift`, `NativeCommandTests.swift`._
+
+## 公式与 Mermaid
+
+`RenderedContent` 持久化类型、UUID 和源码，使用单个 U+FFFC 的 `RenderedContentAttribute` 存入 `Note.richText`。`NoteAttributeScope` 与原生桥接共同保存属性；搜索和摘要投影为源码。剪贴板私有格式复制对象时生成新 UUID，Markdown 输出恢复 `$…$`、`$$` 或 `mermaid` 围栏。
+
+`DocumentContentRenderer` 使用随包分发的 KaTeX/Mermaid，在非持久化 WKWebView 中离线渲染并生成图像，最多同时两个实例，缓存最近 32 个结果。临时尺寸和像素不进入笔记数据。macOS 为 WebKit 子进程启用 network-client entitlement；页面只允许本地导航且 CSP 禁止网络，KaTeX 禁止 trust，Mermaid 使用 strict；源长度、展开次数、边数和图像尺寸有限制。渲染失败显示可点击的错误占位，源码仍可编辑和导出。
+
+`RenderedContentOverlayController` 把 SwiftUI 渲染视图放在 TextKit 附件的位置；单击选中对象并编辑源码。公式浮层通过临时附件更新正文预览，关闭时通过 coordinator 提交一次撤销；Mermaid 使用 sheet，取消不写回、应用注册撤销。`RenderedContentDraft` 隔离草稿与持久化，以 250 ms 防抖更新预览，取消和代次校验阻止过期结果覆盖；错误保留上次有效图像。`SourceCodeEditor` 使用原生文本输入实现基础高亮、缩进与 Mermaid 行号，组合输入期间不刷新源码或高亮。异步完成后按对象身份与源码重新查找位置，移除、切换文档或过期编辑不能写回旧位置。脚本与资源更新说明见 `scripts/document-rendering/README.md`。

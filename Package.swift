@@ -12,7 +12,7 @@ let package = Package(
             resources: [
                 .copy("Resources/CodeFormatting"), .copy("Resources/Fonts"), .process("Resources/en.lproj"),
                 .process("Resources/zh-Hans.lproj"), .process("Resources/EditorIcons.xcassets"),
-                .copy("Resources/EditorIcons-LICENSE.txt"),
+                .copy("Resources/EditorIcons-LICENSE.txt"), .copy("Resources/DocumentRendering"),
             ]),
         .testTarget(name: "YoursTests", dependencies: ["Yours"]),
     ]

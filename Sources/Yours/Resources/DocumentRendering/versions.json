@@ -1,0 +1,9 @@
+{
+  "mermaid": "12.1.0",
+  "katex": "0.19.0",
+  "sha256": {
+    "mermaid.js": "f9a9f80ae4d9b4d774b37ed4f714fdec4ac104ff71600fc23c386e3af31e3d80",
+    "katex.css": "d4ab5b8ee16989b070cdb0ea24bd6ad48fc8df1b787f280f29d3ae4f959f2c00",
+    "katex.js": "759af5767122e89d1565f613a84dad457767ca0901a81ab3c11484596e9920ca"
+  }
+}

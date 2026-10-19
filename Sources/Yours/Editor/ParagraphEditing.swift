@@ -221,7 +221,9 @@ enum ParagraphEditing {
             text[range][QuoteAttribute.self] = quoteIsAppliedToEveryRun ? nil : true
             return
         }
-        guard !text[range].runs.contains(where: { $0[TableAttribute.self] != nil }) else { return }
+        guard !text[range].runs.contains(where: { $0[TableAttribute.self] != nil || $0[RenderedContentAttribute.self] != nil }) else {
+            return
+        }
         let originalRange = NSRange(range, in: text)
         var content = AttributedString(text[range])
         let source = String(content.characters) as NSString

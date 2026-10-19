@@ -40,6 +40,7 @@ struct NativeRichTextEditor {
         private var revision = 0
         private var controlsTargetRange = NSRange(location: 0, length: 0)
         private let tables = TableOverlayController()
+        private let renderedContents = RenderedContentOverlayController()
         private let codeHeaders = CodeHeaderOverlayController()
 
         init(parent: NativeRichTextEditor) {
@@ -157,6 +158,7 @@ struct NativeRichTextEditor {
             }
             nativeAttributes = positionedHeadingTypingAttributes(nativeAttributes, at: range.location, in: source as String)
             nativeAttributes.removeValue(forKey: .attachment)
+            nativeAttributes.removeValue(forKey: .yoursRenderedContent)
             nativeAttributes.removeValue(forKey: .yoursTable)
             let localAttributes = locallyAppliedTypingAttributes
             locallyAppliedTypingAttributes = nil
@@ -229,6 +231,10 @@ struct NativeRichTextEditor {
                     layout.revealCodeCaret(at: currentSelection.location, in: textView.textContainer)
                 #endif
             }
+            renderedContents.updateSelection(in: textView)
+            #if os(macOS)
+                renderedContents.updateSelectionEmphasis(textView.window?.firstResponder === textView)
+            #endif
             let text = value ?? parent.text
             guard let range = Range<AttributedString.Index>(currentSelection, in: text) else { return }
             if range.isEmpty {
@@ -242,6 +248,9 @@ struct NativeRichTextEditor {
 
         fileprivate func refreshTables() {
             guard let textView else { return }
+            renderedContents.refresh(in: textView) { [weak self] original, source in
+                self?.changeRenderedContent(original: original, source: source)
+            }
             codeHeaders.refresh(
                 in: textView,
                 onLanguage: { [weak self] id, language in
@@ -365,6 +374,25 @@ struct NativeRichTextEditor {
             guard !hasMarkedText, let storage, let view = textView, currentSelection.length == 0 else { return false }
             let paragraph = (storage.string as NSString).paragraphRange(for: currentSelection)
             let line = (storage.string as NSString).substring(with: paragraph)
+            let quoted =
+                paragraph.location < storage.length
+                ? storage.attribute(.yoursQuote, at: paragraph.location, effectiveRange: nil) as? Bool == true
+                : view.typingAttributes[.yoursQuote] as? Bool == true
+            if quoted, currentSelection.location == paragraph.location,
+                line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                var body = AttributedString(" ")
+                body.font = .body
+                body[ParagraphStyleAttribute.self] = "body"
+                let attributes = NativeTextAttributes.native(body, context: parent.fontContext).attributes(at: 0, effectiveRange: nil)
+                let next = NSMutableAttributedString(attributedString: storage)
+                next.setAttributes(attributes, range: paragraph)
+                registerUndo(
+                    text: NSAttributedString(attributedString: storage), selection: currentSelection, attributes: view.typingAttributes)
+                apply(text: next, selection: currentSelection, attributes: attributes)
+                view.undoManager?.setActionName(L10n.string("quote.exit"))
+                return true
+            }
             let role =
                 paragraph.location < storage.length
                 ? storage.attribute(.yoursParagraphStyle, at: paragraph.location, effectiveRange: nil) as? String
@@ -381,7 +409,9 @@ struct NativeRichTextEditor {
             guard !hasMarkedText, let storage, let view = textView, currentSelection.length > 0 else { return false }
             let range = currentSelection
             let selected = NativeTextAttributes.rich(storage.attributedSubstring(from: range))
-            let hasTable = selected.runs.contains { $0[TableAttribute.self] != nil || $0[ListMarkerAttribute.self] != nil }
+            let hasTable = selected.runs.contains {
+                $0[TableAttribute.self] != nil || $0[ListMarkerAttribute.self] != nil || $0[RenderedContentAttribute.self] != nil
+            }
             guard let encoded = try? RichTextClipboard.encode(selected) else {
                 #if os(macOS)
                     NSSound.beep()
@@ -412,6 +442,15 @@ struct NativeRichTextEditor {
                 body.font = .body
                 body[ParagraphStyleAttribute.self] = "body"
                 let attributes = NativeTextAttributes.native(body, context: parent.fontContext).attributes(at: 0, effectiveRange: nil)
+                let originalParagraph = (storage.string as NSString).paragraphRange(for: NSRange(location: range.location, length: 0))
+                let remainingParagraph = (next.string as NSString).paragraphRange(for: NSRange(location: range.location, length: 0))
+                if range.location == originalParagraph.location, NSMaxRange(range) > NSMaxRange(originalParagraph),
+                    (next.string as NSString).substring(with: remainingParagraph).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                {
+                    // A trailing paragraph terminator belongs to the removed content,
+                    // not to the new empty body paragraph left by a multi-paragraph cut.
+                    next.setAttributes(attributes, range: remainingParagraph)
+                }
                 apply(text: next, selection: NSRange(location: range.location, length: 0), attributes: attributes)
                 view.undoManager?.setActionName(L10n.string("edit.cut"))
             }
@@ -431,23 +470,66 @@ struct NativeRichTextEditor {
                 let plainText = pasteboard.string
                 let hasRichText = pasteboard.contains(pasteboardTypes: ["public.rtf", "com.apple.flat-rtfd", "public.html"])
             #endif
-            return pasteContent(encoded: encoded, plainText: plainText, hasRichText: hasRichText)
+            var richText: NSAttributedString?
+            if encoded == nil, hasRichText, plainText?.contains("$") == true {
+                #if os(macOS)
+                    richText = pasteboard.readObjects(forClasses: [NSAttributedString.self], options: nil)?.first as? NSAttributedString
+                #else
+                    for (type, format) in [("public.rtf", NSAttributedString.DocumentType.rtf), ("public.html", .html)] {
+                        if let data = pasteboard.data(forPasteboardType: type) {
+                            richText = try? NSAttributedString(data: data, options: [.documentType: format], documentAttributes: nil)
+                            if richText != nil { break }
+                        }
+                    }
+                #endif
+            }
+            return pasteContent(encoded: encoded, plainText: plainText, hasRichText: hasRichText, richText: richText)
         }
 
-        func pasteContent(encoded: Data?, plainText: String?, hasRichText: Bool) -> Bool {
+        func pasteContent(encoded: Data?, plainText: String?, hasRichText: Bool, richText: NSAttributedString? = nil) -> Bool {
             guard !hasMarkedText, let storage, let view = textView,
                 view.typingAttributes[.yoursCodeStyle] == nil
             else { return false }
-            let text: AttributedString
+            var text: AttributedString
+            var nativeFormulas: NSAttributedString?
             if let encoded, let decoded = try? RichTextClipboard.decode(encoded) {
                 text = decoded
-            } else if !hasRichText, let plainText, let markdown = RichTextClipboard.renderMarkdown(plainText) {
+            } else if let richText, let converted = RichTextClipboard.renderFormulas(in: richText, context: parent.fontContext) {
+                nativeFormulas = converted
+                text = NativeTextAttributes.rich(converted)
+            } else if let plainText, let markdown = RichTextClipboard.renderMarkdown(plainText, hasRichText: hasRichText) {
                 text = markdown
             } else {
                 return false
             }
-            let inserted = NativeTextAttributes.native(text, context: parent.fontContext)
             let range = currentSelection
+            // Block objects must not share their paragraph with surrounding prose.
+            var boundary = AttributedString("\n")
+            boundary.font = .body
+            boundary[ParagraphStyleAttribute.self] = "body"
+            let existing = storage.string as NSString
+            if text.runs.first?[RenderedContentAttribute.self]?.isBlock == true,
+                range.location > 0, existing.substring(with: NSRange(location: range.location - 1, length: 1)) != "\n"
+            {
+                text = boundary + text
+                if let native = nativeFormulas {
+                    let prefixed = NSMutableAttributedString(
+                        attributedString: NativeTextAttributes.native(boundary, context: parent.fontContext))
+                    prefixed.append(native)
+                    nativeFormulas = prefixed
+                }
+            }
+            if text.runs.last?[RenderedContentAttribute.self]?.isBlock == true,
+                NSMaxRange(range) == storage.length || existing.substring(with: NSRange(location: NSMaxRange(range), length: 1)) != "\n"
+            {
+                text += boundary
+                if let native = nativeFormulas {
+                    let suffixed = NSMutableAttributedString(attributedString: native)
+                    suffixed.append(NativeTextAttributes.native(boundary, context: parent.fontContext))
+                    nativeFormulas = suffixed
+                }
+            }
+            let inserted = nativeFormulas ?? NativeTextAttributes.native(text, context: parent.fontContext)
             registerUndo(text: NSAttributedString(attributedString: storage), selection: range, attributes: view.typingAttributes)
             let next = NSMutableAttributedString(attributedString: storage)
             next.replaceCharacters(in: range, with: inserted)
@@ -458,6 +540,30 @@ struct NativeRichTextEditor {
             apply(text: next, selection: NSRange(location: range.location + inserted.length, length: 0), attributes: attributes)
             view.undoManager?.setActionName(L10n.string("edit.paste"))
             return true
+        }
+
+        func changeRenderedContent(original: RenderedContent, source: String) {
+            guard !hasMarkedText, source != original.source, let storage, let view = textView else { return }
+            var target: NSRange?
+            storage.enumerateAttribute(.yoursRenderedContent, in: NSRange(location: 0, length: storage.length)) { value, range, stop in
+                if let data = value as? Data, (try? JSONDecoder().decode(RenderedContent.self, from: data)) == original {
+                    target = range
+                    stop.pointee = true
+                }
+            }
+            guard let target, target.length == 1 else { return }
+            registerUndo(
+                text: NSAttributedString(attributedString: storage), selection: currentSelection, attributes: view.typingAttributes)
+            var content = original
+            content.source = source
+            guard let encoded = try? JSONEncoder().encode(content) else { return }
+            let next = NSMutableAttributedString(attributedString: storage)
+            next.addAttribute(.yoursRenderedContent, value: encoded, range: target)
+            next.addAttribute(.attachment, value: RenderedContentAttachment(content: content), range: target)
+            var body = AttributedString(" ")
+            body.font = .body
+            let attributes = NativeTextAttributes.native(body, context: parent.fontContext).attributes(at: 0, effectiveRange: nil)
+            apply(text: next, selection: NSRange(location: NSMaxRange(target), length: 0), attributes: attributes)
         }
 
         func changeTable(id: UUID, table: TableData) {
@@ -488,6 +594,7 @@ struct NativeRichTextEditor {
             if !suppressSlashTrigger, replacement == "/", range.length == 0 { pendingSlash = true }
             if slashAnchor != nil, replacement == "\n" { return !handleControlKey("return") }
             textView.typingAttributes.removeValue(forKey: .attachment)
+            textView.typingAttributes.removeValue(forKey: .yoursRenderedContent)
             textView.typingAttributes.removeValue(forKey: .yoursTable)
             let context = EditorInputContext(
                 storage: storage,
@@ -639,6 +746,14 @@ struct NativeRichTextEditor {
                 #endif
             }
             let originalAttributes = attributes
+            if context.replacement == "\n", [.body, .bullet, .numbered, .task, .quote].contains(edit.style) {
+                for key: NSAttributedString.Key in [
+                    .underlineStyle, .underlineColor, .strikethroughStyle, .strikethroughColor,
+                    .link, .backgroundColor, .yoursInlineSpacing, .kern,
+                ] {
+                    attributes.removeValue(forKey: key)
+                }
+            }
             let base = (attributes[.font] as? PlatformFont)
             let originalFont = (attributes[.yoursStoredFont] as? PlatformFont).map { $0 as CTFont }
             let font: Font
@@ -994,6 +1109,10 @@ struct NativeRichTextEditor {
             }
             if controls.hasDetail { dismissControls() }
             if pendingSlash {
+                // Retain highlights only while refining the current query, never
+                // across separate slash sessions (including the same text offset).
+                controls.state.commands = []
+                controls.state.highlighted = 0
                 slashAnchor = EditorSlashQuery.detect(in: storage.string, caret: currentSelection.location)?.range.location
                 pendingSlash = false
             }
@@ -1037,7 +1156,7 @@ struct NativeRichTextEditor {
             }
             let rich = NativeTextAttributes.rich(storage)
             if !isSlash, let selected = Range<AttributedString.Index>(range, in: rich),
-                rich[selected].runs.contains(where: { $0[TableAttribute.self] != nil })
+                rich[selected].runs.contains(where: { $0[TableAttribute.self] != nil || $0[RenderedContentAttribute.self] != nil })
             {
                 controls.close()
                 return
@@ -1305,6 +1424,7 @@ struct NativeRichTextEditor {
             guard lastNativeValue.attribute(.yoursQuote, at: anchor, effectiveRange: nil) as? Bool == true else { return }
             var attributes = lastNativeValue.attributes(at: anchor, effectiveRange: nil)
             attributes.removeValue(forKey: .attachment)
+            attributes.removeValue(forKey: .yoursRenderedContent)
             attributes.removeValue(forKey: .yoursTable)
             attributes[.yoursQuote] = true
             view.typingAttributes = attributes
@@ -1357,6 +1477,17 @@ struct NativeRichTextEditor {
 
 #if os(macOS)
     final class ReadingMacTextView: NSTextView {
+        var selectionFocusChanged: ((Bool) -> Void)?
+        override func becomeFirstResponder() -> Bool {
+            let accepted = super.becomeFirstResponder()
+            if accepted { selectionFocusChanged?(true) }
+            return accepted
+        }
+        override func resignFirstResponder() -> Bool {
+            let accepted = super.resignFirstResponder()
+            if accepted { selectionFocusChanged?(false) }
+            return accepted
+        }
         override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
             super.drawInsertionPoint(in: visibleInsertionPointRect(rect), color: color, turnedOn: flag)
         }
@@ -1371,10 +1502,19 @@ struct NativeRichTextEditor {
             let spacing = (paragraph?.lineSpacing ?? 0) * DocumentTypography.selectionLineSpacingShare
             let offset = max(0, (rect.height - spacing - height) / 2)
             var top = rect.minY + offset
-            if let layout = layoutManager, let storage = textStorage, storage.length > 0 {
+            if let layout = layoutManager, let storage = textStorage {
                 let caret = min(selectedRange().location, storage.length)
-                let trailingEmptyLine = caret == storage.length && storage.string.hasSuffix("\n")
-                if !trailingEmptyLine {
+                let trailingEmptyLine =
+                    caret == storage.length
+                    && (storage.length == 0 || storage.string.last.map { "\n\u{2028}\u{2029}".contains($0) } == true)
+                if trailingEmptyLine, let layout = layout as? CodeLayoutManager,
+                    let lineHeight = paragraph?.maximumLineHeight, lineHeight > 0
+                {
+                    // Empty fragments have no glyph baseline. Use the same canonical
+                    // baseline as populated fragments rather than centering the caret.
+                    let baseline = rect.minY + layout.stableBaselineOffset(fontSize: font.pointSize, lineHeight: lineHeight)
+                    top = max(rect.minY, min(baseline - metrics.ascender, rect.maxY - height))
+                } else if !trailingEmptyLine, storage.length > 0 {
                     let character = min(caret, storage.length - 1)
                     let glyph = layout.glyphIndexForCharacter(at: character)
                     let line = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
@@ -1468,6 +1608,7 @@ struct NativeRichTextEditor {
                     emphasis: emphasis, role: role, in: &attributes)
             }
             attributes.removeValue(forKey: .attachment)
+            attributes.removeValue(forKey: .yoursRenderedContent)
             attributes.removeValue(forKey: .yoursTable)
             typingAttributes = attributes
         }
@@ -1533,6 +1674,7 @@ struct NativeRichTextEditor {
         override func setSelectedRange(_ charRange: NSRange, affinity: NSSelectionAffinity, stillSelecting flag: Bool) {
             if let boundary = inlineCodeBoundary, charRange != NSRange(location: boundary.index, length: 0) { discardInlineCodeBoundary() }
             super.setSelectedRange(charRange, affinity: affinity, stillSelecting: flag)
+            if flag { selectionTrackingChanged?() }
         }
 
         override func insertText(_ insertString: Any, replacementRange: NSRange) {
@@ -1574,6 +1716,7 @@ struct NativeRichTextEditor {
         }
 
         var selectionFinished: (() -> Void)?
+        var selectionTrackingChanged: (() -> Void)?
         var dismissControlMenus: (() -> Void)?
         override func menu(for event: NSEvent) -> NSMenu? {
             dismissControlMenus?()
@@ -2050,6 +2193,9 @@ struct NativeRichTextEditor {
             scroll.hasVerticalScroller = true
             scroll.autohidesScrollers = true
             let view = ReadingMacTextView(frame: scroll.contentView.bounds)
+            view.selectionFocusChanged = { [weak coordinator = context.coordinator] focused in
+                coordinator?.updateRenderedSelectionFocus(focused)
+            }
             view.exitTrailingCode = { [weak coordinator = context.coordinator] in coordinator?.exitTrailingCode() ?? false }
             view.didResolveTypingAttributes = { [weak coordinator = context.coordinator] in coordinator?.publishSelection() }
             view.copyStructured = { [weak coordinator = context.coordinator] cut in coordinator?.copyStructured(cut: cut) ?? false }
@@ -2069,6 +2215,9 @@ struct NativeRichTextEditor {
             #if os(macOS)
                 view.dismissControlMenus = { [weak coordinator = context.coordinator] in coordinator?.dismissRootControls() }
                 view.selectionFinished = { [weak coordinator = context.coordinator] in coordinator?.controlsAfterSelection() }
+                view.selectionTrackingChanged = { [weak coordinator = context.coordinator] in
+                    coordinator?.updateRenderedSelectionDuringTracking()
+                }
             #endif
             view.refreshTables = { [weak coordinator = context.coordinator] in
                 coordinator?.refreshTables()
@@ -2116,6 +2265,14 @@ struct NativeRichTextEditor {
     }
 
     extension NativeRichTextEditor.Coordinator: NSTextViewDelegate {
+        func updateRenderedSelectionDuringTracking() {
+            guard let textView else { return }
+            renderedContents.updateSelection(in: textView, tracking: true)
+        }
+
+        func updateRenderedSelectionFocus(_ focused: Bool) {
+            renderedContents.updateSelectionEmphasis(focused)
+        }
         func textDidEndEditing(_ notification: Notification) { dismissRootControls() }
 
         func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
@@ -2164,6 +2321,15 @@ struct NativeRichTextEditor {
             controlsAfterTyping()
         }
         func textViewDidChangeSelection(_ notification: Notification) {
+            if let previous = notification.userInfo?["NSOldSelectedCharacterRange"] as? NSValue,
+                previous.rangeValue.length > 0, let textView,
+                previous.rangeValue != textView.selectedRange()
+            {
+                // Native selection invalidation can leave fractional-pixel edges
+                // around our custom line metrics. Repaint the viewport when a
+                // highlighted range changes; caret-only movement stays incremental.
+                textView.setNeedsDisplay(textView.visibleRect)
+            }
             (textView as? ReadingMacTextView)?.updateEmptyQuoteBar()
             publishSelection()
             controlsAfterSelection()
