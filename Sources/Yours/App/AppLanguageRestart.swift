@@ -15,6 +15,9 @@
             guard app.pathExtension == "app" else { throw CocoaError(.executableNotLoadable) }
             // Wait for the old process to exit before reopening this same app.
             // Arguments are passed separately, never interpolated into shell code.
+            // LaunchServices can retain the exited instance briefly and ignore
+            // new arguments. Only after the PID exits, force a fresh launch so
+            // the selected language and isolated test session reach main().
             // A cancelled termination leaves this helper to time out without
             // opening another instance or writing to the same library twice.
             let helper = Process()
@@ -31,9 +34,9 @@
                     attempts=$((attempts + 1))
                 done
                 if [ -n "$4" ]; then
-                    exec /usr/bin/open --env "YOURS_UI_TEST_SESSION=$4" "$2" --args -AppleLanguages "($3)" -ApplePersistenceIgnoreState YES -YoursLanguageRelaunch YES -YoursUITestSession "$4"
+                    exec /usr/bin/open -n --env "YOURS_UI_TEST_SESSION=$4" "$2" --args -AppleLanguages "($3)" -ApplePersistenceIgnoreState YES -YoursLanguageRelaunch YES -YoursUITestSession "$4"
                 else
-                    exec /usr/bin/open "$2" --args -AppleLanguages "($3)" -ApplePersistenceIgnoreState YES -YoursLanguageRelaunch YES
+                    exec /usr/bin/open -n "$2" --args -AppleLanguages "($3)" -ApplePersistenceIgnoreState YES -YoursLanguageRelaunch YES
                 fi
                 """,
                 "yours-language-restart", String(ProcessInfo.processInfo.processIdentifier), app.path, language.rawValue,
