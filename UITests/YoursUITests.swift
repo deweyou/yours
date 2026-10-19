@@ -203,7 +203,7 @@ final class YoursUITests: XCTestCase {
             XCTAssertTrue(profileText.contains("Automated tests"))
         }
 
-        func testMacSettingsLanguageConfirmationAndCompactLoading() {
+        func testMacSettingsLanguageConfirmationAndCompactLoading() throws {
             app.terminate()
             app.launchEnvironment["YOURS_UI_TEST_SYNC_LOADING"] = "1"
             app.launch()
@@ -216,6 +216,10 @@ final class YoursUITests: XCTestCase {
             app.buttons["workspace-settings"].click()
             let language = app.popUpButtons["settings-language"]
             XCTAssertTrue(language.waitForExistence(timeout: 5))
+            let storageProfile = app.staticTexts["settings-storage-profile"]
+            let storageIdentity = try XCTUnwrap(storageProfile.value as? String)
+            let testSession = try XCTUnwrap(app.launchEnvironment["YOURS_UI_TEST_SESSION"])
+            XCTAssertTrue(storageIdentity.hasPrefix(testSession + "|"))
             let progress = app.descendants(matching: .any)["settings-sync-progress"].firstMatch
             XCTAssertTrue(progress.exists, app.debugDescription)
             XCTAssertLessThanOrEqual(progress.frame.height, 16)
@@ -238,6 +242,9 @@ final class YoursUITests: XCTestCase {
             app.buttons["workspace-settings"].click()
             XCTAssertEqual(app.popUpButtons["settings-language"].value as? String, "English")
             XCTAssertEqual(app.popUpButtons["settings-theme"].label, "Theme")
+            XCTAssertEqual(
+                storageProfile.value as? String, storageIdentity,
+                "Restart must reopen the same isolated storage root and session")
             app.buttons["workspace-documents"].click()
             let savedNote = recordCard(titled: "Language restart check")
             XCTAssertTrue(savedNote.waitForExistence(timeout: 5))

@@ -31,7 +31,7 @@
                     attempts=$((attempts + 1))
                 done
                 if [ -n "$4" ]; then
-                    exec /usr/bin/open "$2" --args -AppleLanguages "($3)" -ApplePersistenceIgnoreState YES -YoursLanguageRelaunch YES -YoursUITestSession "$4"
+                    exec /usr/bin/open --env "YOURS_UI_TEST_SESSION=$4" "$2" --args -AppleLanguages "($3)" -ApplePersistenceIgnoreState YES -YoursLanguageRelaunch YES -YoursUITestSession "$4"
                 else
                     exec /usr/bin/open "$2" --args -AppleLanguages "($3)" -ApplePersistenceIgnoreState YES -YoursLanguageRelaunch YES
                 fi

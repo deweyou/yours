@@ -182,7 +182,9 @@ struct AppSettingsView: View {
                 switch AppStorage.current.profile {
                 case .production: EmptyView()
                 case .development: Text("storage.profile.development")
-                case .test: Text("storage.profile.test")
+                case .test(let session):
+                    Text("storage.profile.test")
+                        .accessibilityValue("\(session.uuidString)|\(AppStorage.current.root.path)")
                 }
             }
             .font(.caption)
