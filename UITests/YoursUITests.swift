@@ -209,6 +209,9 @@ final class YoursUITests: XCTestCase {
             app.launch()
             app.activate()
             newNote()
+            app.textFields["note-title"].click()
+            app.textFields["note-title"].typeText("Language restart check\n")
+            editor.click()
             editor.typeText("语言重启验证")
             app.buttons["workspace-settings"].click()
             let language = app.popUpButtons["settings-language"]
@@ -236,7 +239,10 @@ final class YoursUITests: XCTestCase {
             XCTAssertEqual(app.popUpButtons["settings-language"].value as? String, "English")
             XCTAssertEqual(app.popUpButtons["settings-theme"].label, "Theme")
             app.buttons["workspace-documents"].click()
-            XCTAssertTrue(app.staticTexts["语言重启验证"].waitForExistence(timeout: 5))
+            let savedNote = recordCard(titled: "Language restart check")
+            XCTAssertTrue(savedNote.waitForExistence(timeout: 5))
+            savedNote.click()
+            expectText("语言重启验证")
         }
 
         func testMacCleanWorkspaceAndInbox() {
