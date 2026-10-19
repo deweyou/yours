@@ -7,7 +7,7 @@ enum MarkdownFormatting {
         var result = AttributedString()
         var literal = ""
         for run in text.runs {
-            if run[TableAttribute.self] != nil || run[CodeStyleAttribute.self] != nil {
+            if run[TableAttribute.self] != nil || run[CodeStyleAttribute.self] != nil || run[RenderedContentAttribute.self] != nil {
                 if !literal.isEmpty {
                     result += render(literal)
                     literal = ""
@@ -41,6 +41,13 @@ enum MarkdownFormatting {
                 let literal = lines[(index + 1)..<closing].map { line in
                     outer.quoted ? quoteContent(line).content : line
                 }.joined(separator: "\n")
+                if CodeBlockEditing.languageTag(from: outer.content) == "mermaid" {
+                    var rendered = RenderedContent(kind: .mermaid, source: literal).attributedText
+                    rendered[QuoteAttribute.self] = outer.quoted ? true : nil
+                    paragraphs.append(rendered)
+                    index = closing + 1
+                    continue
+                }
                 var block = AttributedString(literal)
                 block.font = .body.monospaced()
                 block[CodeStyleAttribute.self] = codeID
@@ -50,6 +57,29 @@ enum MarkdownFormatting {
                 paragraphs.append(block)
                 index = closing + 1
                 continue
+            }
+            let trimmed = outer.content.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("$$") {
+                var formula: String?
+                var next = index + 1
+                if trimmed.count > 4, trimmed.hasSuffix("$$") {
+                    formula = String(trimmed.dropFirst(2).dropLast(2))
+                } else if trimmed == "$$",
+                    let closing = lines.indices.dropFirst(index + 1).first(where: {
+                        let candidate = quoteContent(lines[$0])
+                        return candidate.quoted == outer.quoted && candidate.content.trimmingCharacters(in: .whitespaces) == "$$"
+                    }), !outer.quoted || (index...closing).allSatisfy({ quoteContent(lines[$0]).quoted })
+                {
+                    formula = lines[(index + 1)..<closing].map { outer.quoted ? quoteContent($0).content : $0 }.joined(separator: "\n")
+                    next = closing + 1
+                }
+                if let formula, !formula.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    var rendered = RenderedContent(kind: .displayMath, source: formula).attributedText
+                    rendered[QuoteAttribute.self] = outer.quoted ? true : nil
+                    paragraphs.append(rendered)
+                    index = next
+                    continue
+                }
             }
             let tableLines = outer.quoted ? lines.map { quoteContent($0).content } : lines
             if let parsed = TableData.parse(lines: tableLines, at: index),
@@ -210,6 +240,12 @@ enum MarkdownFormatting {
         while index < paragraphs.count {
             let paragraph = paragraphs[index]
             let role = roles[index]
+            if let rendered = paragraph.runs.first?[RenderedContentAttribute.self], rendered.isBlock {
+                output.append(quotes[index] ? quotedMarkdown(rendered.markdown) : rendered.markdown)
+                outputStyles.append(quotes[index] ? "quote" : "rendered")
+                index += 1
+                continue
+            }
             if let table = paragraph.runs.first?[TableAttribute.self] {
                 let markdown = quotes[index] ? quotedMarkdown(table.markdown) : table.markdown
                 output.append(markdown)
@@ -312,9 +348,11 @@ enum MarkdownFormatting {
             if run[CodeStyleAttribute.self] == "inline" { intent.insert(.code) }
             segment.inlinePresentationIntent = intent
             segment.link = run.link
+            segment[RenderedContentAttribute.self] = run[RenderedContentAttribute.self]
             normalized += segment
         }
         return normalized.runs.map { run in
+            if let rendered = run[RenderedContentAttribute.self] { return rendered.markdown }
             let literal = String(normalized[run.range].characters)
             let intent = run.inlinePresentationIntent ?? []
             var content: String
@@ -347,7 +385,7 @@ enum MarkdownFormatting {
 
     private static func escape(_ source: String) -> String {
         source.reduce(into: "") { result, character in
-            if "\\`*_{}[]<>()#+-.!|~>".contains(character) { result.append("\\") }
+            if "\\`*_{}[]<>()#+-.!|~>$".contains(character) { result.append("\\") }
             result.append(character)
         }
     }
@@ -423,7 +461,8 @@ enum MarkdownFormatting {
 
     private static func inline(_ source: String, baseFont: Font) -> AttributedString {
         // Images are not part of the text data model. Keep their complete syntax visible.
-        let safeSource = preservingUnsupportedSyntax(source)
+        let protected = MathMarkdown.protect(source)
+        let safeSource = preservingUnsupportedSyntax(protected.text)
         var text =
             (try? AttributedString(markdown: safeSource, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
             ?? AttributedString(source)
@@ -457,6 +496,14 @@ enum MarkdownFormatting {
                     text.replaceSubrange(run.range, with: replacement)
                     break
                 }
+            }
+        }
+        for (token, expression) in protected.expressions {
+            if let range = text.range(of: token) {
+                var replacement = expression.attributedText
+                if let attributes = text[range].runs.first?.attributes { replacement.mergeAttributes(attributes) }
+                replacement[RenderedContentAttribute.self] = expression
+                text.replaceSubrange(range, with: replacement)
             }
         }
         return text

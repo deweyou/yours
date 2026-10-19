@@ -14,6 +14,7 @@ extension EditorFeatureRegistry {
         SemanticBackspaceFeature(),
         ListIndentInputFeature(),
         MarkdownShortcutInputFeature(),
+        ParagraphBreakInputFeature(),
     ]
 }
 
@@ -30,6 +31,7 @@ private enum StandardFeaturePriority: Int {
     case semanticBackspace = 1_000
     case listIndent = 1_100
     case markdownShortcut = 1_200
+    case paragraphBreak = 1_300
 }
 
 private struct LinkInputFeature: EditorInputFeature {
@@ -274,5 +276,17 @@ private struct MarkdownShortcutInputFeature: EditorInputFeature {
                 hasMarkedText: false)
         else { return nil }
         return .edit(edit, origin: .markdownShortcut)
+    }
+}
+
+/// A normal Return starts fresh inline formatting after structural features have
+/// handled list, quote, heading, and fenced-code continuation.
+private struct ParagraphBreakInputFeature: EditorInputFeature {
+    let id = "paragraph-break"
+    let priority = StandardFeaturePriority.paragraphBreak.rawValue
+
+    func command(for context: EditorInputContext) -> EditorInputCommand? {
+        guard context.replacement == "\n", context.codeStyle?.hasPrefix("block:") != true else { return nil }
+        return .edit(.init(range: context.range, replacement: "\n", style: .body), origin: .feature)
     }
 }

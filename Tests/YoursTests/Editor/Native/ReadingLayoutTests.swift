@@ -7,6 +7,28 @@ import Testing
     import AppKit
 
     struct ReadingLayoutTests {
+        @Test @MainActor func insertionPointUsesFontHeightWithoutChangingReadingLayout() {
+            let view = ReadingMacTextView(frame: .zero)
+            for size: CGFloat in [14, 20, 24] {
+                let paragraph = NSMutableParagraphStyle()
+                paragraph.lineSpacing = 6
+                let original = NSRect(x: 10, y: 20, width: 2, height: size * 1.6 + 2)
+                for font in [NSFont.systemFont(ofSize: size), NSFont.monospacedSystemFont(ofSize: size, weight: .regular)] {
+                    view.typingAttributes = [.font: font, .paragraphStyle: paragraph]
+                    let visible = view.visibleInsertionPointRect(original)
+                    let metrics = NSFont.systemFont(ofSize: size)
+                    #expect(visible.height == ceil(metrics.ascender - metrics.descender))
+                    #expect(visible.height < original.height)
+                    #expect(visible.minX == original.minX)
+                    #expect(visible.width == original.width)
+                    #expect(original.contains(visible))
+                    #expect(view.visibleInsertionPointRect(original) == visible)
+                }
+                let clipped = NSRect(x: 10, y: 20, width: 2, height: 5)
+                #expect(view.visibleInsertionPointRect(clipped) == clipped)
+            }
+        }
+
         @Test @MainActor func codeExpansionAndOverflowHintsFollowVisibleBounds() throws {
             let lines = (1...60).map { "print(\($0)) " + String(repeating: "wide ", count: 20) }.joined(separator: "\n")
             let storage = NSTextStorage(
@@ -407,7 +429,7 @@ import Testing
                     layout, shouldUseTemporaryAttributes: NativeTextAttributes.linkTextAttributes,
                     forDrawingToScreen: true, atCharacterIndex: 1, effectiveRange: &range))
             let actual = try #require((attributes[.foregroundColor] as? NSColor)?.usingColorSpace(.deviceRGB))
-            let expected = try #require(AppTheme.nativeAccent.usingColorSpace(.deviceRGB))
+            let expected = try #require(AppTheme.nativeAccent.blended(withFraction: 0.15, of: .black)?.usingColorSpace(.deviceRGB))
             // Color objects may differ in HDR metadata while rendering the same RGBA components.
             #expect(abs(actual.redComponent - expected.redComponent) < 0.0001)
             #expect(abs(actual.greenComponent - expected.greenComponent) < 0.0001)
@@ -418,7 +440,7 @@ import Testing
             let other = layout.layoutManager(
                 layout, shouldUseTemporaryAttributes: NativeTextAttributes.linkTextAttributes,
                 forDrawingToScreen: true, atCharacterIndex: 7, effectiveRange: nil)
-            #expect(other?[.foregroundColor] == nil)
+            #expect(other?[.foregroundColor] as? NSColor == AppTheme.nativeAccent)
             #expect(view.firstRect(forCharacterRange: NSRange(location: 1, length: 0), actualRange: nil) == caret)
             #expect(storage.isEqual(to: original))
             view.updateHoveredLink(at: CGPoint(x: 450, y: glyphRect.midY + view.textContainerOrigin.y))
@@ -819,6 +841,206 @@ import Testing
                             * (DocumentTypography.quoteBarVerticalOvershootRatio + DocumentTypography.quoteBarOpticalRiseRatio))) < 0.01)
         }
 
+        @Test(arguments: [CGFloat(0), CGFloat(32)]) @MainActor func nativeSelectionFillExcludesCodeSurfacePadding(inset: CGFloat) throws {
+            let storage = NSTextStorage(
+                attributedString: NativeTextAttributes.native(
+                    MarkdownFormatting.render("打`撒`大"), context: EnvironmentValues().fontResolutionContext))
+            let layout = CodeLayoutManager()
+            let container = NSTextContainer(size: CGSize(width: 300, height: 120))
+            storage.addLayoutManager(layout)
+            layout.addTextContainer(container)
+            let view = ReadingMacTextView(frame: CGRect(x: 0, y: 0, width: 300, height: 120), textContainer: container)
+            view.textContainerInset = NSSize(width: inset, height: 10)
+            let window = NSWindow(contentRect: view.frame, styleMask: .borderless, backing: .buffered, defer: false)
+            window.contentView = view
+            window.makeFirstResponder(view)
+            let range = (storage.string as NSString).range(of: "撒")
+            layout.ensureLayout(for: container)
+            let glyphs = layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            var selection = CGRect.zero
+            layout.enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: glyphs, in: container) { rect, _ in
+                selection = rect.offsetBy(dx: view.textContainerOrigin.x, dy: view.textContainerOrigin.y)
+            }
+            func render(_ selected: NSRange) throws -> NSBitmapImageRep {
+                view.setSelectedRange(selected)
+                let bitmap = try #require(
+                    NSBitmapImageRep(
+                        bitmapDataPlanes: nil, pixelsWide: 300, pixelsHigh: 120,
+                        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                        bytesPerRow: 0, bitsPerPixel: 0))
+                let context = try #require(NSGraphicsContext(bitmapImageRep: bitmap))
+                NSGraphicsContext.saveGraphicsState()
+                defer { NSGraphicsContext.restoreGraphicsState() }
+                NSGraphicsContext.current = context
+                NSColor.white.setFill()
+                CGRect(x: 0, y: 0, width: 300, height: 120).fill()
+                layout.drawBackground(forGlyphRange: layout.glyphRange(for: container), at: view.textContainerOrigin)
+                return bitmap
+            }
+            let plain = try render(NSRange(location: 0, length: 0))
+            let selected = try render(range)
+            func changedPixels(at x: Int) -> Int {
+                (0..<120).filter { y in
+                    plain.colorAt(x: x, y: y) != selected.colorAt(x: x, y: y)
+                }.count
+            }
+            #expect(changedPixels(at: Int(selection.midX)) > 0)
+            #expect(changedPixels(at: Int(ceil(selection.maxX)) + 2) == 0)
+        }
+
+        @Test @MainActor func arrowsVisitBothSidesOfInlineCodeBoundaries() throws {
+            let view = ReadingMacTextView(frame: CGRect(x: 0, y: 0, width: 500, height: 200))
+            view.textContainer?.replaceLayoutManager(CodeLayoutManager())
+            view.textStorage?.setAttributedString(
+                NativeTextAttributes.native(
+                    MarkdownFormatting.render("前`撒`后"), context: EnvironmentValues().fontResolutionContext))
+            view.setSelectedRange(NSRange(location: 0, length: 0))
+            let stops: [(Int, Bool?)] = [(1, false), (1, true), (2, true), (2, false), (3, nil)]
+            var points: [CGFloat] = []
+            for (index, inside) in stops {
+                view.moveRight(nil)
+                #expect(view.selectedRange() == NSRange(location: index, length: 0))
+                #expect(view.inlineCodeBoundary?.inside == inside)
+                if let inside {
+                    #expect((view.typingAttributes[.yoursCodeStyle] as? String == "inline") == inside)
+                    points.append(try #require(view.inlineCodeBoundaryPoint()).x)
+                }
+            }
+            #expect(zip(points, points.dropFirst()).allSatisfy { $0 < $1 })
+            for (index, inside) in [(2, false), (2, true), (1, true), (1, false)] {
+                view.moveLeft(nil)
+                #expect(view.selectedRange() == NSRange(location: index, length: 0))
+                #expect(view.inlineCodeBoundary?.inside == inside)
+            }
+            #expect(view.string == "前撒后")
+        }
+
+        @Test(arguments: [true, false], [true, false]) @MainActor
+        func codeOnlyDocumentCanInsertInsideOrOutside(leading: Bool, inside: Bool) throws {
+            let view = ReadingMacTextView(frame: CGRect(x: 0, y: 0, width: 500, height: 200))
+            view.textContainer?.replaceLayoutManager(CodeLayoutManager())
+            let storage = try #require(view.textStorage)
+            storage.setAttributedString(
+                NativeTextAttributes.native(
+                    MarkdownFormatting.render("`撒`"), context: EnvironmentValues().fontResolutionContext))
+            view.setSelectedRange(NSRange(location: leading ? 0 : 1, length: 0))
+            #expect(view.setInlineCodeBoundary(inside: inside))
+            let point = try #require(view.inlineCodeBoundaryPoint())
+            let layout = try #require(view.layoutManager as? CodeLayoutManager)
+            let container = try #require(view.textContainer)
+            let surface = try #require(
+                layout.inlineCodeBackgroundRects(forGlyphRange: NSRange(location: 0, length: 1), in: container).first)
+            #expect((point.x > surface.minX && point.x < surface.maxX) == inside)
+            view.insertText("🌿", replacementRange: view.selectedRange())
+            let inserted = (view.string as NSString).range(of: "🌿")
+            #expect((storage.attribute(.yoursCodeStyle, at: inserted.location, effectiveRange: nil) as? String == "inline") == inside)
+            #expect(view.string == (leading ? "🌿撒" : "撒🌿"))
+        }
+
+        @Test(arguments: [false, true]) @MainActor func clickingCodeBoundaryKeepsTypingInsideCode(atEnd: Bool) throws {
+            let storage = NSTextStorage(
+                attributedString: NativeTextAttributes.native(
+                    MarkdownFormatting.render("前`撒`后"), context: EnvironmentValues().fontResolutionContext))
+            let layout = CodeLayoutManager()
+            let container = NSTextContainer(size: CGSize(width: 400, height: 200))
+            storage.addLayoutManager(layout)
+            layout.addTextContainer(container)
+            let view = ReadingMacTextView(frame: CGRect(x: 0, y: 0, width: 400, height: 200), textContainer: container)
+            let window = NSWindow(contentRect: view.frame, styleMask: .borderless, backing: .buffered, defer: false)
+            window.contentView = view
+            window.makeFirstResponder(view)
+            layout.ensureLayout(for: container)
+            let code = NSRange(location: 1, length: 1)
+            let glyphs = layout.glyphRange(forCharacterRange: code, actualCharacterRange: nil)
+            let surface = try #require(layout.inlineCodeBackgroundRects(forGlyphRange: glyphs, in: container).first)
+            let insertion = atEnd ? NSMaxRange(code) : code.location
+            view.setSelectedRange(NSRange(location: insertion, length: 0))
+            view.typingAttributes = storage.attributes(at: 0, effectiveRange: nil)
+            view.resolveInlineCodeTypingAttributes(at: CGPoint(x: atEnd ? surface.maxX - 1 : surface.minX + 1, y: surface.midY))
+            #expect(view.typingAttributes[.yoursCodeStyle] as? String == "inline")
+            #expect(view.typingAttributes[.yoursInlineSpacing] == nil)
+            view.insertText("中文🌿", replacementRange: view.selectedRange())
+            let inserted = (storage.string as NSString).range(of: "中文🌿")
+            storage.enumerateAttribute(.yoursCodeStyle, in: inserted) { value, _, _ in
+                #expect(value as? String == "inline")
+            }
+            #expect(storage.attribute(.yoursCodeStyle, at: storage.length - 1, effectiveRange: nil) == nil)
+        }
+
+        @Test @MainActor func bodyTypingDoesNotPlaceCaretInsideCodeSurface() throws {
+            let storage = NSTextStorage(
+                attributedString: NativeTextAttributes.native(
+                    MarkdownFormatting.render("前`撒`后"), context: EnvironmentValues().fontResolutionContext))
+            let layout = CodeLayoutManager()
+            let container = NSTextContainer(size: CGSize(width: 400, height: 200))
+            storage.addLayoutManager(layout)
+            layout.addTextContainer(container)
+            let view = ReadingMacTextView(frame: CGRect(x: 0, y: 0, width: 400, height: 200), textContainer: container)
+            view.setSelectedRange(NSRange(location: 2, length: 0))
+            view.typingAttributes = storage.attributes(at: 2, effectiveRange: nil)
+            layout.ensureLayout(for: container)
+            let count = layout.getLineFragmentInsertionPoints(
+                forCharacterAt: 2, alternatePositions: false,
+                inDisplayOrder: false, positions: nil, characterIndexes: nil)
+            var positions = [CGFloat](repeating: 0, count: count)
+            var indexes = [Int](repeating: 0, count: count)
+            _ = layout.getLineFragmentInsertionPoints(
+                forCharacterAt: 2, alternatePositions: false,
+                inDisplayOrder: false, positions: &positions, characterIndexes: &indexes)
+            let end = try #require(indexes.firstIndex(of: 2))
+            let nextGlyph = layout.glyphIndexForCharacter(at: 2)
+            #expect(abs(positions[end] - layout.location(forGlyphAt: nextGlyph).x) < 0.5)
+            view.resolveInlineCodeTypingAttributes(at: CGPoint(x: positions[end] + 1, y: 10))
+            #expect(view.typingAttributes[.yoursCodeStyle] == nil)
+        }
+
+        @Test @MainActor func inlineCodeSurfaceAndEditingBoundariesAreIndependent() throws {
+            for word in ["撒", "value", "🌿", "e\u{301}"] {
+                let native = NativeTextAttributes.native(
+                    MarkdownFormatting.render("前`" + word + "`后"), context: EnvironmentValues().fontResolutionContext)
+                let storage = NSTextStorage(attributedString: native)
+                let layout = CodeLayoutManager()
+                let container = NSTextContainer(size: CGSize(width: 500, height: 10_000))
+                storage.addLayoutManager(layout)
+                layout.addTextContainer(container)
+                layout.ensureLayout(for: container)
+                let range = (native.string as NSString).range(of: word)
+                let glyphs = layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+                let background = try #require(layout.inlineCodeBackgroundRects(forGlyphRange: glyphs, in: container).first)
+                let undecorated = NSMutableAttributedString(attributedString: native.attributedSubstring(from: range))
+                undecorated.removeAttribute(.kern, range: NSRange(location: 0, length: undecorated.length))
+                let width = CGFloat(CTLineGetTypographicBounds(CTLineCreateWithAttributedString(undecorated), nil, nil, nil))
+                var selection: [CGRect] = []
+                layout.enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: glyphs, in: container) { rect, _ in
+                    selection.append(rect)
+                }
+                let rect = try #require(selection.first)
+                #expect(abs(rect.width - width) < 0.5)
+                #expect(background.minX < rect.minX)
+                #expect(background.maxX > rect.maxX)
+                let view = ReadingMacTextView(frame: CGRect(x: 0, y: 0, width: 500, height: 200), textContainer: container)
+                view.setSelectedRange(NSRange(location: NSMaxRange(range), length: 0))
+                view.typingAttributes = storage.attributes(at: range.location, effectiveRange: nil)
+                view.setInlineCodeBoundary(inside: true)
+                let count = layout.getLineFragmentInsertionPoints(
+                    forCharacterAt: range.location, alternatePositions: false,
+                    inDisplayOrder: false, positions: nil, characterIndexes: nil)
+                var positions = [CGFloat](repeating: 0, count: count)
+                var indexes = [Int](repeating: 0, count: count)
+                _ = layout.getLineFragmentInsertionPoints(
+                    forCharacterAt: range.location, alternatePositions: false,
+                    inDisplayOrder: false, positions: &positions, characterIndexes: &indexes)
+                let end = try #require(indexes.firstIndex(of: NSMaxRange(range)))
+                let fragment = layout.lineFragmentRect(forGlyphAt: glyphs.location, effectiveRange: nil)
+                #expect(abs(positions[end] + fragment.minX - rect.maxX) < 0.5)
+                var fraction: CGFloat = 0
+                let hit = layout.characterIndex(
+                    for: CGPoint(x: rect.maxX + 1, y: rect.midY),
+                    in: container, fractionOfDistanceBetweenInsertionPoints: &fraction)
+                #expect(hit + (fraction > 0.5 ? 1 : 0) == NSMaxRange(range))
+            }
+        }
+
         @Test @MainActor func leadingInlineCodeReservesItsScaledLeftMargin() throws {
             for prefix in ["", "# "] {
                 let storage = NSTextStorage(
@@ -1077,6 +1299,7 @@ import Testing
                 ("", "\nNext"), ("Before\n", "\nNext"), ("Before\u{2028}", "\nNext"), ("", ""), ("Before\n", ""), ("Before\u{2028}", ""),
             ] {
                 var rects: [CGRect] = []
+                var visibleRects: [CGRect] = []
                 for content in ["", "x", "\u{4E2D}", ""] {
                     let context = EnvironmentValues().fontResolutionContext
                     let storage = NSTextStorage(
@@ -1092,7 +1315,14 @@ import Testing
                         at: 0, effectiveRange: nil)
                     view.setSelectedRange(NSRange(location: prefix.utf16.count, length: 0))
                     layout.ensureLayout(for: container)
-                    rects.append(view.firstRect(forCharacterRange: view.selectedRange(), actualRange: nil))
+                    let screen = view.firstRect(forCharacterRange: view.selectedRange(), actualRange: nil)
+                    rects.append(screen)
+                    let local = view.convert(window.convertFromScreen(screen), from: nil)
+                    visibleRects.append(view.visibleInsertionPointRect(local))
+                }
+                for visible in visibleRects {
+                    #expect(abs(visible.minY - visibleRects[0].minY) < 0.5)
+                    #expect(abs(visible.height - visibleRects[0].height) < 0.5)
                 }
                 for rect in rects {
                     // Screen-space maxY is the top. Native final-line font leading

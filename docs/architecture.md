@@ -46,6 +46,14 @@
 
 代码块默认总高度限制为 400 pt；当前编辑视图按块保存临时展开状态，展开后按完整内容高度布局，收起重置纵向偏移。工具栏由自然内容高度决定是否提供展开入口，边缘不绘制渐变。`CodeLayoutManager` 保留自然行位置与块内纵向偏移，行片段只贡献其与可见窗口相交的高度；文字、UTF-16 选区及撤销仍使用原存储，绘制裁剪在工具栏下方。原生方向键移动前先显示相邻视觉行，折叠光标变化后按需滚动；修改、窗口宽度变化和换行切换后钳制偏移。Mac 滚轮和移动端 pan 按主要方向路由至当前块，共用滚动条渐隐状态。平台手势、输入法和选择操作仍需按验证矩阵实际检查。
 
+## 编辑命令与临时浮层
+
+`EditorCommands.swift` 定义共享的格式动作、可搜索目录、slash 查询和语义转换；`NativeEditorControls.swift` 只承载临时界面。Mac 使用编辑器窗口的非激活子面板，UIKit 的 slash 候选放在键盘附件区，选区格式接系统编辑菜单，以共享命令替换系统格式子菜单并保留复制、粘贴等建议操作。单选区与多选区 delegate 入口汇入同一路径。复杂选项的输入焦点由平台宿主管理。
+
+`NativeRichTextEditor.Coordinator` 持有会话和内容修订号，验证记录身份与目标范围，再统一执行文字、选区、输入属性和撤销快照。页面的格式按钮通过 `EditorCommandBridge` 调用此路径，不为同一动作重复注册模型层撤销。选区链接面板冻结原目标；文档或修订变化后拒绝过期动作。目录、搜索词和面板状态不持久化，已提交编辑仍通过原有富文本绑定和保存路径写入。
+
+正文行首或空格后的 slash 输入在文字提交后识别，组合输入期间隐藏候选且不消费候选键。粘贴与撤销不自动唤起。整段命令和行内命令保持不同作用域；对已完成任务重复设置相同段落类型不重置完成状态，代码块只允许完整范围转换。显示与操作规则见 [DESIGN](../DESIGN.md#slash-与选区工具栏)，验证范围见 [验证](verification.md#slash-与选区格式回归)。
+
 ## 数据与恢复
 
 当前应用标识为 `app.yours.editor`，存储目录为 `Yours`，应用偏好、富文本与剪贴板自定义标识统一使用 `yours`。产品未发布，本次更名不迁移开发期 Weave 沙箱、存储目录、偏好或富文本属性键；旧文件保留，Yours 使用独立存储。
@@ -122,3 +130,13 @@ MacWorkspaceNavigation 以页面和可选文档 UUID 为访问位置，通过 se
 _Last updated: 2026-09-28 — 记录正文显示字体的可逆桥接与资源边界。_
 
 `AppTheme.documentBody` / `documentHeading` 为按外观与对比度解析的原生动态颜色，供 SwiftUI 标题、表格和原生正文共用。`NativeTextAttributes.rich` 排除这些默认显示色，段落角色切换重新选择默认色；显式自定义颜色不参与主题投影。
+
+_Last updated: 2026-09-28 — 补充 Slash 与选区格式入口、共享事务和验证边界。Evidence: `EditorCommands.swift`, `NativeRichTextEditor.swift`, `EditorCommandContractTests.swift`, `NativeCommandTests.swift`._
+
+## 公式与 Mermaid
+
+`RenderedContent` 持久化类型、UUID 和源码，使用单个 U+FFFC 的 `RenderedContentAttribute` 存入 `Note.richText`。`NoteAttributeScope` 与原生桥接共同保存属性；搜索和摘要投影为源码。剪贴板私有格式复制对象时生成新 UUID，Markdown 输出恢复 `$…$`、`$$` 或 `mermaid` 围栏。
+
+`DocumentContentRenderer` 使用随包分发的 KaTeX/Mermaid，在非持久化 WKWebView 中离线渲染并生成图像，最多同时两个实例，缓存最近 32 个结果。临时尺寸和像素不进入笔记数据。macOS 为 WebKit 子进程启用 network-client entitlement；页面只允许本地导航且 CSP 禁止网络，KaTeX 禁止 trust，Mermaid 使用 strict；源长度、展开次数、边数和图像尺寸有限制。渲染失败显示可点击的错误占位，源码仍可编辑和导出。
+
+`RenderedContentOverlayController` 把 SwiftUI 渲染视图放在 TextKit 附件的位置；单击选中对象并编辑源码。公式浮层通过临时附件更新正文预览，关闭时通过 coordinator 提交一次撤销；Mermaid 使用 sheet，取消不写回、应用注册撤销。`RenderedContentDraft` 隔离草稿与持久化，以 250 ms 防抖更新预览，取消和代次校验阻止过期结果覆盖；错误保留上次有效图像。`SourceCodeEditor` 使用原生文本输入实现基础高亮、缩进与 Mermaid 行号，组合输入期间不刷新源码或高亮。异步完成后按对象身份与源码重新查找位置，移除、切换文档或过期编辑不能写回旧位置。脚本与资源更新说明见 `scripts/document-rendering/README.md`。

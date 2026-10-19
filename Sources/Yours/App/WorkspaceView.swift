@@ -61,10 +61,9 @@ struct NoteEditorView: View {
     let retrySave: () -> Void
     @FocusState private var isTitleFocused: Bool
     @FocusState private var isFocused: Bool
+    @State private var commandBridge = EditorCommandBridge()
     @State private var selection = AttributedTextSelection()
     @State private var showsMarkdownHelp = false
-    @State private var showsLinkEditor = false
-    @State private var linkAddress = ""
     @State private var showsExport = false
     @State private var exportDocument = MarkdownFile(source: "")
     @State private var exportError: String?
@@ -126,10 +125,10 @@ struct NoteEditorView: View {
                 text: Binding(
                     get: { richText },
                     set: { store.updateRichText(id: note.id, text: $0) }
-                ), selection: $selection, focusWhenEmpty: false, focusRequest: bodyFocusRequest,
+                ), selection: $selection, commandBridge: commandBridge, documentID: note.id, focusWhenEmpty: false,
+                focusRequest: bodyFocusRequest,
                 onEditLink: {
-                    linkAddress = selection.attributes(in: richText).compactMap { $0.link?.absoluteString }.first ?? ""
-                    showsLinkEditor = true
+                    commandBridge.openLink?()
                 },
                 onToast: { toast.show($0) }
             )
@@ -162,13 +161,13 @@ struct NoteEditorView: View {
                         ) { toggleItalic() }
                         .keyboardShortcut("i", modifiers: .command)
                         Button(formatLabel(L10n.string("format.underline")) { $0.underlineStyle != nil }, systemImage: "underline") {
-                            format { $0.underlineStyle = $0.underlineStyle == nil ? .single : nil }
+                            commandBridge.perform?(.underline)
                         }
                         .keyboardShortcut("u", modifiers: .command)
                         Button(
                             formatLabel(L10n.string("format.strikethrough")) { $0.strikethroughStyle != nil }, systemImage: "strikethrough"
                         ) {
-                            format { $0.strikethroughStyle = $0.strikethroughStyle == nil ? .single : nil }
+                            commandBridge.perform?(.strike)
                         }
                         Divider()
                         ForEach(1...6, id: \.self) { level in
@@ -187,24 +186,13 @@ struct NoteEditorView: View {
                         .keyboardShortcut(.return, modifiers: [.command, .shift])
                         Divider()
                         Button("link.add_or_edit", systemImage: "link") {
-                            linkAddress = selection.attributes(in: richText).compactMap { $0.link?.absoluteString }.first ?? ""
-                            showsLinkEditor = true
+                            commandBridge.openLink?()
                         }
                         .keyboardShortcut("k", modifiers: .command)
                         .disabled(!hasSelection)
-                        Button("link.remove") { format { $0.link = nil } }
+                        Button("link.remove") { commandBridge.perform?(.link(nil)) }
                         .disabled(!hasSelection)
-                        Button("format.clear") {
-                            format {
-                                $0.font = .body
-                                $0.underlineStyle = nil
-                                $0.strikethroughStyle = nil
-                                $0.foregroundColor = nil
-                                $0.backgroundColor = nil
-                                $0.link = nil
-                                $0[CodeStyleAttribute.self] = nil
-                            }
-                        }
+                        Button("format.clear") { commandBridge.perform?(.clear) }
                         Button("format.monospaced", systemImage: "chevron.left.forwardslash.chevron.right") {
                             toggleCode()
                         }
@@ -239,6 +227,16 @@ struct NoteEditorView: View {
             }
             .safeAreaInset(edge: .top, spacing: 0) { formattingBar.disabled(isTitleFocused) }
         #endif
+        #if os(macOS)
+            .focusedSceneValue(
+                \.markdownActions,
+                MarkdownActions(
+                    copy: copyMarkdown,
+                    export: {
+                        exportDocument = MarkdownFile(source: MarkdownFormatting.serialize(richText, context: fontContext))
+                        showsExport = true
+                    }))
+        #endif
         .fileExporter(
             isPresented: $showsExport, document: exportDocument, contentType: MarkdownFile.contentType,
             defaultFilename: note.markdownFilename
@@ -251,29 +249,6 @@ struct NoteEditorView: View {
             Text(exportError ?? "")
         }
         .onChange(of: richText) { _, _ in didCopyMarkdown = false }
-        .sheet(isPresented: $showsLinkEditor) {
-            NavigationStack {
-                Form {
-                    TextField("link.url", text: $linkAddress)
-                    Text("link.url.help")
-                        .foregroundStyle(.secondary)
-                }
-                .navigationTitle(L10n.string("link.edit"))
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("common.cancel") { showsLinkEditor = false } }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("common.save") {
-                            guard let url = validatedLink else { return }
-                            format { $0.link = url }
-                            showsLinkEditor = false
-                        }.disabled(validatedLink == nil)
-                    }
-                }
-            }
-            #if os(macOS)
-                .frame(width: 440, height: 180)
-            #endif
-        }
         .sheet(isPresented: $showsMarkdownHelp) {
             NavigationStack {
                 List {
@@ -399,15 +374,7 @@ struct NoteEditorView: View {
         .background(.bar)
     }
 
-    private func insertTable() {
-        var updated = richText
-        var body = AttributedString("\n")
-        body.font = .body
-        body[ParagraphStyleAttribute.self] = "body"
-        let table = TableData().attributedText
-        updated.replaceSelection(&selection, with: body + table + body)
-        store.applyRichEdit(id: note.id, text: updated, undoManager: undoManager)
-    }
+    private func insertTable() { commandBridge.insertTable?() }
 
     private func copyMarkdown() {
         let source = MarkdownFormatting.serialize(richText, context: fontContext)
@@ -420,20 +387,9 @@ struct NoteEditorView: View {
         didCopyMarkdown = true
     }
 
-    private func toggleCode() {
-        let remove = selection.attributes(in: richText).allSatisfy { $0[CodeStyleAttribute.self] == "inline" }
-        format {
-            $0[CodeStyleAttribute.self] = remove ? nil : "inline"
-            $0.font = remove ? ParagraphEditing.font(for: $0[ParagraphStyleAttribute.self] ?? "body") : .body.monospaced()
-        }
-    }
+    private func toggleCode() { commandBridge.perform?(.inlineCode) }
 
-    private func indentList(outdent: Bool) {
-        var updated = richText
-        ParagraphEditing.indentList(in: &updated, selection: &selection, outdent: outdent)
-        store.applyRichEdit(id: note.id, text: updated, undoManager: undoManager)
-        isFocused = true
-    }
+    private func indentList(outdent: Bool) { commandBridge.perform?(.indent(outdent)) }
 
     private func formatLabel(_ title: String, matches: (AttributeContainer) -> Bool) -> String {
         let values = selection.attributes(in: richText).map(matches)
@@ -443,18 +399,8 @@ struct NoteEditorView: View {
         return title
     }
 
-    private var validatedLink: URL? {
-        guard let url = URL(string: linkAddress.trimmingCharacters(in: .whitespacesAndNewlines)),
-            ["https", "http", "mailto"].contains(url.scheme?.lowercased() ?? "")
-        else { return nil }
-        return url
-    }
-
     private func paragraph(_ style: String) {
-        var updated = richText
-        ParagraphEditing.apply(style, to: &updated, selection: &selection, context: fontContext)
-        store.applyRichEdit(id: note.id, text: updated, undoManager: undoManager)
-        isFocused = true
+        commandBridge.perform?(style == "quote" ? .quote : .paragraph(style))
     }
 
     private func toggleTask() {
@@ -468,21 +414,10 @@ struct NoteEditorView: View {
         return false
     }
 
-    private func format(_ change: (inout AttributeContainer) -> Void) {
-        var updated = richText
-        updated.transformAttributes(in: &selection, body: change)
-        store.applyRichEdit(id: note.id, text: updated, undoManager: undoManager)
-        isFocused = true
-    }
-
     private func toggleBold() { toggleEmphasis(1) }
     private func toggleItalic() { toggleEmphasis(2) }
 
-    private func toggleEmphasis(_ flag: Int) {
-        let attributes = selection.attributes(in: richText).map { $0 }
-        let remove = !attributes.isEmpty && attributes.allSatisfy { DocumentTypography.emphasis(in: $0, context: fontContext) & flag != 0 }
-        format { DocumentTypography.setEmphasis(flag, enabled: !remove, in: &$0, context: fontContext) }
-    }
+    private func toggleEmphasis(_ flag: Int) { commandBridge.perform?(.emphasis(flag)) }
 
     private func convertMarkdown(wholeDocument: Bool) {
         var updated = richText
@@ -500,3 +435,19 @@ struct NoteEditorView: View {
         isFocused = true
     }
 }
+
+#if os(macOS)
+    struct MarkdownActions {
+        var copy: () -> Void
+        var export: () -> Void
+    }
+    private struct MarkdownActionsKey: FocusedValueKey {
+        typealias Value = MarkdownActions
+    }
+    extension FocusedValues {
+        var markdownActions: MarkdownActions? {
+            get { self[MarkdownActionsKey.self] }
+            set { self[MarkdownActionsKey.self] = newValue }
+        }
+    }
+#endif

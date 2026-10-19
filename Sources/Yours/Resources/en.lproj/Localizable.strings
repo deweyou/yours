@@ -170,3 +170,48 @@
 "navigation.back" = "Back";
 
 "navigation.forward" = "Forward";
+
+"editor.category.text" = "Text";
+"editor.category.lists" = "Lists";
+"editor.category.blocks" = "Blocks";
+"editor.no_results" = "No matching commands";
+"editor.mixed" = "Mixed";
+"editor.enabled" = "Enabled";
+"editor.more" = "More formatting";
+"editor.rows" = "Rows";
+"editor.columns" = "Columns";
+"common.apply" = "Apply";
+"editor.heading.level1" = "Heading 1";
+"editor.heading.level2" = "Heading 2";
+"editor.heading.level3" = "Heading 3";
+"editor.heading.level4" = "Heading 4";
+"editor.heading.level5" = "Heading 5";
+"editor.heading.level6" = "Heading 6";
+
+"rendered.unavailable" = "Rendering is unavailable. Source is preserved.";
+
+"rendered.too_large" = "This expression is too large to preview.";
+
+"rendered.failed" = "Preview unavailable";
+
+"rendered.edit" = "Edit source";
+
+"rendered.mermaid" = "Mermaid diagram";
+
+"rendered.math" = "Math expression";
+
+"rendered.cancel" = "Cancel";
+
+"rendered.apply" = "Apply";
+
+"rendered.preview" = "Preview";
+"rendered.last_preview" = "Last valid preview";
+"rendered.preview_error" = "Preview could not update";
+"rendered.rendering" = "Rendering preview…";
+"rendered.preview_empty" = "The preview will appear here after the source is corrected";
+"rendered.zoom_out" = "Zoom out";
+"rendered.zoom_fit" = "Fit to view";
+"rendered.zoom_in" = "Zoom in";
+
+"rendered.formula_hint" = "Esc or click outside to finish";
+"rendered.done" = "Done";

@@ -170,3 +170,48 @@
 "navigation.back" = "后退";
 
 "navigation.forward" = "前进";
+
+"editor.category.text" = "文字";
+"editor.category.lists" = "列表";
+"editor.category.blocks" = "内容块";
+"editor.no_results" = "没有匹配的命令";
+"editor.mixed" = "混合";
+"editor.enabled" = "已启用";
+"editor.more" = "更多格式";
+"editor.rows" = "行数";
+"editor.columns" = "列数";
+"common.apply" = "应用";
+"editor.heading.level1" = "标题 1";
+"editor.heading.level2" = "标题 2";
+"editor.heading.level3" = "标题 3";
+"editor.heading.level4" = "标题 4";
+"editor.heading.level5" = "标题 5";
+"editor.heading.level6" = "标题 6";
+
+"rendered.unavailable" = "暂时无法渲染，源码已保留。";
+
+"rendered.too_large" = "内容过大，无法预览。";
+
+"rendered.failed" = "无法预览";
+
+"rendered.edit" = "编辑源码";
+
+"rendered.mermaid" = "Mermaid 图表";
+
+"rendered.math" = "数学公式";
+
+"rendered.cancel" = "取消";
+
+"rendered.apply" = "应用";
+
+"rendered.preview" = "预览";
+"rendered.last_preview" = "上次有效预览";
+"rendered.preview_error" = "预览暂时无法更新";
+"rendered.rendering" = "正在生成预览…";
+"rendered.preview_empty" = "修正源码后将在这里显示预览";
+"rendered.zoom_out" = "缩小";
+"rendered.zoom_fit" = "适应窗口";
+"rendered.zoom_in" = "放大";
+
+"rendered.formula_hint" = "Esc 或点击外部完成编辑";
+"rendered.done" = "完成";

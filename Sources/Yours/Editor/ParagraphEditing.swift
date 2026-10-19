@@ -47,9 +47,9 @@ enum DocumentTypography {
     static let selectionLineSpacingShare: CGFloat = 1 / 3
     static let inlineCodeScale: CGFloat = 0.93
     static let inlineCodePaddingRatio: CGFloat = 0.5
+    static let inlineCodeMarginRatio: CGFloat = 0.3
     static let inlineCodeVerticalPaddingRatio: CGFloat = 0.14
     static let inlineCodeRadiusRatio: CGFloat = 0.46
-    static let inlineCodeMarginRatio: CGFloat = 0.3
     static let inlineCodeBackgroundRiseRatio: CGFloat = 0.08
     static let codeLineSpacing: CGFloat = 3
     static let codeInset: CGFloat = 16
@@ -195,7 +195,6 @@ enum ParagraphEditing {
         guard !isEmptyEnd, let range = paragraphRange(in: text, selection: selection) else {
             var attributes = selection.typingAttributes(in: text)
             attributes[TableAttribute.self] = nil
-            attributes[CodeLanguageAttribute.self] = nil
             if style == "quote" {
                 attributes[QuoteAttribute.self] = true
                 let role = attributes[ParagraphStyleAttribute.self] ?? "body"
@@ -205,6 +204,8 @@ enum ParagraphEditing {
                 selection = AttributedTextSelection(insertionPoint: text.endIndex, typingAttributes: attributes)
                 return
             }
+            if attributes[ParagraphStyleAttribute.self] == style { return }
+            attributes[CodeLanguageAttribute.self] = nil
             let emphasis = DocumentTypography.emphasis(in: attributes, context: context)
             attributes[ParagraphStyleAttribute.self] = style
             attributes[InlineEmphasisAttribute.self] = emphasis
@@ -220,7 +221,9 @@ enum ParagraphEditing {
             text[range][QuoteAttribute.self] = quoteIsAppliedToEveryRun ? nil : true
             return
         }
-        guard !text[range].runs.contains(where: { $0[TableAttribute.self] != nil }) else { return }
+        guard !text[range].runs.contains(where: { $0[TableAttribute.self] != nil || $0[RenderedContentAttribute.self] != nil }) else {
+            return
+        }
         let originalRange = NSRange(range, in: text)
         var content = AttributedString(text[range])
         let source = String(content.characters) as NSString
@@ -253,6 +256,9 @@ enum ParagraphEditing {
         }
         let blockID = style == "code" ? "block:" + UUID().uuidString : nil
         for run in Array(content.runs) {
+            // Setting an existing role must preserve task completion and code identity.
+            if run[ParagraphStyleAttribute.self] == style { continue }
+            content[run.range][TaskStateAttribute.self] = style == "task" ? false : nil
             let emphasis = DocumentTypography.emphasis(in: run.attributes, context: context)
             let inlineCode = run[CodeStyleAttribute.self] == "inline" && style != "code"
             content[run.range][ParagraphStyleAttribute.self] = style
@@ -263,7 +269,6 @@ enum ParagraphEditing {
         }
         if !content.characters.isEmpty {
             let whole = content.startIndex..<content.endIndex
-            content[whole][TaskStateAttribute.self] = style == "task" ? false : nil
             content[whole][ListMarkerAttribute.self] = nil
             let plain = String(content.characters) as NSString
             var offset = 0

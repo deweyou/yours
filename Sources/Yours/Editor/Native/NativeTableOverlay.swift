@@ -31,6 +31,41 @@ final class TableOverlayController {
     private var entries: [UUID: Entry] = [:]
     private var isRefreshing = false
 
+    func focusFirstCell(id: UUID) {
+        guard let entry = entries[id] else { return }
+        entry.model.focusRequest += 1
+        // A newly attached hosting view receives its native fields after the
+        // document transaction. Restore the field responder after that layout,
+        // rather than racing the document's own focus restoration.
+        DispatchQueue.main.async { [weak self, weak entry] in
+            guard let self, let entry, self.entries[id] === entry else { return }
+            #if os(macOS)
+                entry.host.layoutSubtreeIfNeeded()
+                @MainActor func firstField(in view: NSView) -> NSTextField? {
+                    if let field = view as? NSTextField, field.isEditable { return field }
+                    for child in view.subviews {
+                        if let field = firstField(in: child) { return field }
+                    }
+                    return nil
+                }
+                guard let field = firstField(in: entry.host), let window = entry.host.window,
+                    window.isKeyWindow
+                else { return }
+                window.makeFirstResponder(field)
+            #else
+                entry.host.view.layoutIfNeeded()
+                @MainActor func firstField(in view: UIView) -> UITextField? {
+                    if let field = view as? UITextField { return field }
+                    for child in view.subviews {
+                        if let field = firstField(in: child) { return field }
+                    }
+                    return nil
+                }
+                firstField(in: entry.host.view)?.becomeFirstResponder()
+            #endif
+        }
+    }
+
     func refresh(
         in textView: PlatformTextView,
         onChange: @escaping (UUID, TableData) -> Void,

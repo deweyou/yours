@@ -64,6 +64,7 @@ final class TableTextAttachment: NSTextAttachment {
 @Observable @MainActor
 final class NativeTableModel {
     var table: TableData
+    var focusRequest = 0
     var onChange: (TableData) -> Void
     var onExit: () -> Void
 
@@ -131,6 +132,8 @@ struct TableBlockView: View {
         .onChange(of: focusedCell) { _, cell in
             if let cell { activeCell = cell }
         }
+        .onAppear { if model.focusRequest > 0 { focusedCell = Cell(row: 0, column: 0) } }
+        .onChange(of: model.focusRequest) { _, _ in focusedCell = Cell(row: 0, column: 0) }
         .onChange(of: model.table.rows.count) { _, _ in clampActiveCell() }
         .onChange(of: model.table.alignments.count) { _, _ in clampActiveCell() }
     }

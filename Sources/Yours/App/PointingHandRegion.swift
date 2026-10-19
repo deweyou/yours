@@ -4,8 +4,15 @@
 
     /// A non-intercepting native cursor region for controls layered over NSTextView.
     struct PointingHandRegion: NSViewRepresentable {
-        func makeNSView(context: Context) -> PointingHandRegionView { PointingHandRegionView() }
+        var cursor: NSCursor = .pointingHand
+
+        func makeNSView(context: Context) -> PointingHandRegionView {
+            let view = PointingHandRegionView()
+            view.cursor = cursor
+            return view
+        }
         func updateNSView(_ view: PointingHandRegionView, context: Context) {
+            view.cursor = cursor
             view.window?.invalidateCursorRects(for: view)
         }
     }
@@ -13,13 +20,14 @@
     final class PointingHandRegionView: NSView {
         private static let regions = NSHashTable<PointingHandRegionView>.weakObjects()
         private var cursorTracking: NSTrackingArea?
+        var cursor: NSCursor = .pointingHand
 
-        static func contains(_ point: NSPoint, in window: NSWindow?) -> Bool {
-            guard let window else { return false }
-            return regions.allObjects.contains {
+        static func cursor(at point: NSPoint, in window: NSWindow?) -> NSCursor? {
+            guard let window else { return nil }
+            return regions.allObjects.first {
                 $0.window === window && !$0.isHiddenOrHasHiddenAncestor
                     && $0.visibleRect.contains($0.convert(point, from: nil))
-            }
+            }?.cursor
         }
 
         override func viewDidMoveToWindow() {
@@ -35,7 +43,7 @@
 
         override func resetCursorRects() {
             super.resetCursorRects()
-            addCursorRect(visibleRect, cursor: .pointingHand)
+            addCursorRect(visibleRect, cursor: cursor)
         }
 
         override func updateTrackingAreas() {
@@ -48,8 +56,8 @@
             cursorTracking = area
         }
 
-        override func cursorUpdate(with event: NSEvent) { NSCursor.pointingHand.set() }
-        override func mouseEntered(with event: NSEvent) { NSCursor.pointingHand.set() }
+        override func cursorUpdate(with event: NSEvent) { cursor.set() }
+        override func mouseEntered(with event: NSEvent) { cursor.set() }
         override func mouseExited(with event: NSEvent) { NSCursor.arrow.set() }
     }
 #endif

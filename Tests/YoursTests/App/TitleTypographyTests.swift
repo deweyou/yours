@@ -10,7 +10,7 @@ struct TitleTypographyTests {
         try #require(TitleTypography.isRegistered)
         let context = EnvironmentValues().fontResolutionContext
         let font = TitleTypography.document.resolve(in: context).ctFont
-        #expect(CTFontCopyPostScriptName(font) as String == BundledSerifFont.semiboldName)
+        #expect(CTFontCopyPostScriptName(font) as String == BundledSerifFont.heavyName)
         #expect(CTFontGetSize(font) == DocumentTypography.titleSize)
         let characters = Array("思源宋体，记录生活。Yours 2026!?".utf16)
         var glyphs = Array(repeating: CGGlyph(0), count: characters.count)

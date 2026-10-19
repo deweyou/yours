@@ -9,8 +9,8 @@ enum TitleTypography {
     static var resourceBundle: Bundle { BundledSerifFont.resourceBundle }
 
     static var document: Font {
-        guard isRegistered else { return .system(size: DocumentTypography.titleSize, weight: .semibold) }
-        return .custom(BundledSerifFont.semiboldName, fixedSize: DocumentTypography.titleSize)
+        guard isRegistered else { return .system(size: DocumentTypography.titleSize, weight: .black) }
+        return .custom(BundledSerifFont.heavyName, fixedSize: DocumentTypography.titleSize)
     }
 
     static func card(in context: Font.Context) -> Font {

@@ -356,6 +356,8 @@ final class YoursUITests: XCTestCase {
         func testTableTouchEditingAndReturnToDocument() {
             newNote()
             app.buttons["insert-table"].tap()
+            XCTAssertTrue(app.buttons["table-apply"].waitForExistence(timeout: 5))
+            app.buttons["table-apply"].tap()
             let header = app.textFields["table-cell-0-0"]
             XCTAssertTrue(header.waitForExistence(timeout: 5))
             header.tap()
@@ -367,6 +369,31 @@ final class YoursUITests: XCTestCase {
             editor.typeText("After table")
             XCTAssertEqual(value.value as? String, "Touch edit")
             XCTAssertTrue((editor.value as? String)?.hasSuffix("After table") == true)
+        }
+
+        func testTouchSelectionFormattingPreservesTarget() {
+            newNote()
+            editor.typeText("Selected")
+            editor.doubleTap()
+            let format = app.menuItems["格式"]
+            XCTAssertTrue(format.waitForExistence(timeout: 5), app.debugDescription)
+            format.tap()
+            let bold = app.collectionViews.buttons["加粗"].firstMatch
+            XCTAssertTrue(bold.waitForExistence(timeout: 5), app.debugDescription)
+            bold.tap()
+            editor.typeText("Replacement")
+            expectText("Replacement")
+        }
+
+        func testTouchSlashSearchAndContinuedInput() {
+            newNote()
+            editor.typeText("/h2")
+            let heading = app.buttons["slash-command-heading-2"]
+            XCTAssertTrue(heading.waitForExistence(timeout: 5))
+            heading.tap()
+            expectText("")
+            editor.typeText("Heading\nBody")
+            expectText("Heading\nBody")
         }
 
         func testSecondReturnExitsTaskAndQuoteOnTouchEditor() {
@@ -391,6 +418,104 @@ final class YoursUITests: XCTestCase {
     #endif
 
     #if os(macOS)
+        func testSlashSearchConversionUndoAndContinuedInput() {
+            newNote()
+            editor.typeText("/h2")
+            XCTAssertTrue(app.buttons["slash-command-heading-2"].waitForExistence(timeout: 5))
+            editor.typeKey(.return, modifierFlags: [])
+            expectText("")
+            editor.typeKey("z", modifierFlags: .command)
+            expectText("/h2")
+            XCTAssertFalse(app.buttons["slash-command-heading-2"].exists)
+            editor.typeKey("z", modifierFlags: [.command, .shift])
+            expectText("")
+            editor.typeText("Heading\nBody")
+            expectText("Heading\nBody")
+            app.terminate()
+            app.launch()
+            app.activate()
+            app.buttons["workspace-documents"].click()
+            let card = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "note-row-")).firstMatch
+            XCTAssertTrue(card.waitForExistence(timeout: 5))
+            card.click()
+            expectText("Heading\nBody")
+        }
+
+        func testSlashCancellationAndNoResultPreserveLiteralText() {
+            newNote()
+            editor.typeText("/h2")
+            XCTAssertTrue(app.buttons["slash-command-heading-2"].waitForExistence(timeout: 5))
+            editor.typeKey(.escape, modifierFlags: [])
+            expectText("/h2")
+            XCTAssertFalse(app.buttons["slash-command-heading-2"].exists)
+            editor.typeText("\n/zzzznomatch")
+            editor.typeKey(.return, modifierFlags: [])
+            editor.typeText("Literal https://example.com/a/b")
+            expectText("/h2\n/zzzznomatch\nLiteral https://example.com/a/b")
+            XCTAssertFalse(app.buttons["slash-command-body"].exists)
+        }
+
+        func testSlashTableInsertsAndFocusesFirstCell() {
+            newNote()
+            editor.typeText("Intro ")
+            editor.typeText("/")
+            editor.typeText("table")
+            XCTAssertTrue(app.buttons["slash-command-table"].waitForExistence(timeout: 5))
+            editor.typeKey(.return, modifierFlags: [])
+            XCTAssertTrue(app.buttons["table-apply"].waitForExistence(timeout: 5))
+            app.buttons["table-apply"].click()
+            let header = app.textFields["table-cell-0-0"]
+            XCTAssertTrue(header.waitForExistence(timeout: 5))
+            // Send to the current first responder without clicking the cell.
+            app.typeText("Name")
+            XCTAssertEqual(header.value as? String, "Name")
+            XCTAssertTrue((editor.value as? String)?.hasPrefix("Intro ") == true)
+        }
+
+        func testSelectionFormattingRetainsReplacementTarget() {
+            newNote()
+            editor.typeText("Selected text")
+            editor.typeKey("a", modifierFlags: .command)
+            let bold = app.buttons["selection-bold"]
+            XCTAssertTrue(bold.waitForExistence(timeout: 5))
+            bold.click()
+            expectText("Selected text")
+            editor.typeText("Replacement")
+            expectText("Replacement")
+            editor.typeKey("z", modifierFlags: .command)
+            expectText("Selected text")
+        }
+
+        func testSelectionLinkPanelCancelAndApplyKeepText() {
+            newNote()
+            editor.typeText("Link label")
+            editor.typeKey("a", modifierFlags: .command)
+            let link = app.buttons["selection-link"]
+            XCTAssertTrue(link.waitForExistence(timeout: 5))
+            link.click()
+            let address = app.textFields["link-address"]
+            XCTAssertTrue(address.waitForExistence(timeout: 5))
+            address.click()
+            address.typeText("https://example.com")
+            app.buttons["link-cancel"].click()
+            expectText("Link label")
+            XCTAssertTrue(link.waitForExistence(timeout: 5))
+            link.click()
+            XCTAssertTrue(address.waitForExistence(timeout: 5))
+            address.click()
+            address.typeKey("a", modifierFlags: .command)
+            address.typeText("https://example.com")
+            app.buttons["link-apply"].click()
+            expectText("Link label")
+            XCTAssertTrue(link.waitForExistence(timeout: 5))
+            link.click()
+            XCTAssertTrue(address.waitForExistence(timeout: 5))
+            XCTAssertEqual(address.value as? String, "https://example.com")
+            app.buttons["link-cancel"].click()
+            editor.typeText("Replaced link")
+            expectText("Replaced link")
+        }
+
         func testSecondReturnExitsEmptyBulletItem() {
             newNote()
             for character in "- " { editor.typeText(String(character)) }
