@@ -117,7 +117,7 @@
             }
             .focusedSceneValue(\.workspaceNavigation, navigation)
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if navigation.editorID == nil, let error = store.saveError {
+                if navigation.editorID == nil, navigation.destination != .tasks, let error = store.saveError {
                     HStack {
                         Label(L10n.unsaved(error), systemImage: "exclamationmark.triangle")
                         Spacer()
@@ -176,7 +176,7 @@
                     navigation.select(.tasks)
                 }
                 .accessibilityIdentifier("workspace-tasks")
-                .help("tasks.coming_soon.help")
+                .help("navigation.tasks")
                 Spacer(minLength: 0)
                 destinationButton("settings.title", symbol: "gearshape", isSelected: navigation.destination == .settings) {
                     navigation.select(.settings)
@@ -221,6 +221,8 @@
                 if navigation.destination == .settings {
                     AppSettingsView(store: store)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if navigation.destination == .tasks {
+                    TodoWorkspaceView(store: store)
                 } else if navigation.destination == .home {
                     ContentUnavailableView("navigation.home", systemImage: "house", description: Text("home.empty.description"))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)

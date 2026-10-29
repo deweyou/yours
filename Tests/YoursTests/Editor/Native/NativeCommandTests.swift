@@ -89,6 +89,28 @@
             #expect(view.string == before)
         }
 
+        @Test func readOnlyNotesRetainRichTaskAttributesAndRejectEditingCommands() throws {
+            let source = MarkdownFormatting.render("**中文**\n- [x] Completed\n- [ ] Pending")
+            let (view, coordinator, window) = editor(source)
+            defer { window.orderOut(nil) }
+            var selection = AttributedTextSelection(insertionPoint: source.startIndex)
+            let parent = NativeRichTextEditor(
+                text: .constant(source), selection: Binding(get: { selection }, set: { selection = $0 }),
+                isEditable: false, horizontalInset: 32)
+            coordinator.update(parent)
+            let before = NSAttributedString(attributedString: try #require(view.textStorage))
+            #expect(!view.isEditable)
+            #expect(view.isSelectable)
+            #expect(view.textContainerInset.width == 32)
+            #expect(view.textContainer?.lineFragmentPadding == 0)
+            #expect(!coordinator.intercept(range: NSRange(location: 0, length: 0), replacement: "Edit"))
+            coordinator.performControlAction(.emphasis(1), range: NSRange(location: 0, length: view.string.utf16.count))
+            #expect(view.textStorage?.isEqual(to: before) == true)
+            let native = NativeTextAttributes.rich(try #require(view.textStorage))
+            #expect(native.runs.contains { $0[TaskStateAttribute.self] == true })
+            #expect(native.runs.contains { $0[TaskStateAttribute.self] == false })
+        }
+
         private final class ComposingTextView: NSTextView {
             override func hasMarkedText() -> Bool { true }
         }

@@ -67,7 +67,7 @@ final class TableOverlayController {
     }
 
     func refresh(
-        in textView: PlatformTextView,
+        in textView: PlatformTextView, usesDocumentFont: Bool = true,
         onChange: @escaping (UUID, TableData) -> Void,
         onExit: @escaping (Int) -> Void
     ) {
@@ -105,6 +105,8 @@ final class TableOverlayController {
                     textView.addSubview(entry.host.view)
                 #endif
             }
+            entry.model.isEditable = textView.isEditable
+            entry.model.usesDocumentFont = usesDocumentFont
             entry.model.onChange = { onChange(table.id, $0) }
             entry.model.onExit = { onExit(NSMaxRange(range)) }
             let glyphs = layout.glyphRange(forCharacterRange: NSRange(location: range.location, length: 1), actualCharacterRange: nil)
@@ -161,6 +163,7 @@ enum CodeCopyStatus {
 
 @Observable @MainActor
 final class CodeHeaderModel {
+    var isEditable = true
     var language = ""
     var literal = "" {
         didSet {
@@ -235,12 +238,13 @@ struct CodeHeaderView: View {
                 .frame(height: CodeLayoutManager.headerHeight, alignment: .topLeading)
                 .contentShape(Rectangle())
             }
+            .disabled(!model.isEditable)
             .menuIndicator(.hidden)
             .accessibilityLabel("code.language")
             .accessibilityIdentifier("code-language")
             #if os(macOS)
-                .pointerStyle(.link)
-                .background(CodeHeaderPointerRegion())
+                .pointerStyle(model.isEditable ? .link : .default)
+                .background(CodeHeaderPointerRegion(enabled: model.isEditable))
             #endif
             Spacer()
             if model.canExpand || model.isExpanded {
@@ -292,13 +296,13 @@ struct CodeHeaderView: View {
                         .frame(width: 28, height: CodeLayoutManager.headerHeight, alignment: .topTrailing)
                         .contentShape(Rectangle())
                 }
-                .disabled(model.isFormatting)
+                .disabled(model.isFormatting || !model.isEditable)
                 .help(model.isFormatting ? L10n.string("code.format.progress") : L10n.string("code.format"))
                 .accessibilityLabel("code.format")
                 .accessibilityIdentifier("format-code")
                 #if os(macOS)
-                    .pointerStyle(.link)
-                    .background(CodeHeaderPointerRegion())
+                    .pointerStyle(model.isEditable && !model.isFormatting ? .link : .default)
+                    .background(CodeHeaderPointerRegion(enabled: model.isEditable && !model.isFormatting))
                 #endif
             }
             Button {
@@ -355,15 +359,21 @@ struct CodeHeaderView: View {
 #if os(macOS)
     /// Supplies AppKit cursor geometry without intercepting the SwiftUI control's clicks.
     private struct CodeHeaderPointerRegion: NSViewRepresentable {
+        @Environment(\.isEnabled) private var isEnabled
+        var enabled = true
         func makeNSView(context: Context) -> CodeHeaderPointerView { CodeHeaderPointerView() }
-        func updateNSView(_ nsView: CodeHeaderPointerView, context: Context) {}
+        func updateNSView(_ nsView: CodeHeaderPointerView, context: Context) {
+            nsView.pointerEnabled = isEnabled && enabled
+            nsView.window?.invalidateCursorRects(for: nsView)
+        }
     }
 
     private final class CodeHeaderPointerView: NSView {
+        var pointerEnabled = true
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         override func resetCursorRects() {
             super.resetCursorRects()
-            addCursorRect(bounds, cursor: .pointingHand)
+            if pointerEnabled { addCursorRect(bounds, cursor: .pointingHand) }
         }
     }
 
@@ -444,6 +454,7 @@ final class CodeHeaderOverlayController {
                     textView.addSubview(entry.host.view)
                 #endif
             }
+            entry.model.isEditable = textView.isEditable
             entry.model.language = storage.attribute(.yoursCodeLanguage, at: range.location, effectiveRange: nil) as? String ?? ""
             var literal = (storage.string as NSString).substring(with: range)
             if literal.hasSuffix("\n"), NSMaxRange(range) < storage.length { literal.removeLast() }

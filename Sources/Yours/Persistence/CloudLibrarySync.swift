@@ -7,7 +7,7 @@ import Observation
 #endif
 
 enum LibrarySyncError: LocalizedError {
-    case notConfigured, accountUnavailable, accountChanged, invalidLibrary, localStorage, conflict, editorOpen
+    case notConfigured, accountUnavailable, accountChanged, invalidLibrary, localStorage, conflict, editorOpen, todoConflict
 
     var errorDescription: String? {
         switch self {
@@ -18,6 +18,7 @@ enum LibrarySyncError: LocalizedError {
         case .localStorage: L10n.string("sync.local_storage")
         case .conflict: L10n.string("sync.conflict_retry")
         case .editorOpen: L10n.string("sync.editor_open")
+        case .todoConflict: L10n.string("todo.sync.conflict")
         }
     }
 }

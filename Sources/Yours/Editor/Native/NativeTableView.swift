@@ -64,6 +64,8 @@ final class TableTextAttachment: NSTextAttachment {
 @Observable @MainActor
 final class NativeTableModel {
     var table: TableData
+    var isEditable = true
+    var usesDocumentFont = true
     var focusRequest = 0
     var onChange: (TableData) -> Void
     var onExit: () -> Void
@@ -75,6 +77,7 @@ final class NativeTableModel {
     }
 
     func change(_ edit: (inout TableData) -> Void) {
+        guard isEditable else { return }
         var next = table
         edit(&next)
         guard next != table else { return }
@@ -127,6 +130,7 @@ struct TableBlockView: View {
             }
             .overlay { Rectangle().strokeBorder(.primary.opacity(0.10), lineWidth: 0.5) }
         }
+        .disabled(!model.isEditable)
         .environment(\.locale, L10n.language.locale)
         .onHover { isHovering = $0 }
         .onChange(of: focusedCell) { _, cell in
@@ -220,7 +224,12 @@ struct TableBlockView: View {
             )
         )
         .textFieldStyle(.plain)
-        .font(Font(NativeTextAttributes.displayFont(Font.body.weight(row == 0 ? .semibold : .regular).resolve(in: fontContext).ctFont)))
+        .font(
+            Font(
+                NativeTextAttributes.displayFont(
+                    Font.body.weight(row == 0 ? .semibold : .regular).resolve(in: fontContext).ctFont,
+                    usesDocumentFont: model.usesDocumentFont))
+        )
         .foregroundStyle(Color(AppTheme.documentBody))
         .multilineTextAlignment(textAlignment(column))
         .padding(.horizontal, 10)

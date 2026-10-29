@@ -10,6 +10,27 @@ import Testing
 
 @MainActor
 struct BodyTypographyTests {
+    @Test(arguments: [0, 1, 2, 3])
+    func taskNotesUseSystemFontWithoutChangingStoredFormatting(emphasis: Int) throws {
+        let context = EnvironmentValues().fontResolutionContext
+        var text = AttributedString("任务备注 English 中文")
+        text.font = DocumentTypography.font(for: "body", emphasis: emphasis, context: context)
+        text[InlineEmphasisAttribute.self] = emphasis
+        let original = try #require(text.font).resolve(in: context).ctFont
+        let native = NativeTextAttributes.native(text, context: context, usesDocumentFont: false)
+        let displayed = try #require(native.attribute(.font, at: 0, effectiveRange: nil) as? PlatformFont) as CTFont
+        #expect((CTFontCopyPostScriptName(displayed) as String).hasPrefix("SourceHanSerif") == false)
+        #expect(CTFontGetSymbolicTraits(displayed).contains(.traitBold) == (emphasis & 1 != 0))
+        #expect(CTFontGetSymbolicTraits(displayed).contains(.traitItalic) == (emphasis & 2 != 0))
+        let restored = NativeTextAttributes.rich(native)
+        let restoredFont = try #require(restored.font).resolve(in: context).ctFont
+        #expect(CTFontCopyPostScriptName(restoredFont) == CTFontCopyPostScriptName(original))
+        #expect(restored[InlineEmphasisAttribute.self] == emphasis)
+        let code = Font.body.monospaced().resolve(in: context).ctFont
+        let displayedCode = NativeTextAttributes.displayFont(code, usesDocumentFont: false)
+        #expect(CTFontGetSymbolicTraits(displayedCode).contains(.traitMonoSpace))
+    }
+
     @Test(
         arguments: ["body", "heading:1", "heading:2", "heading:3", "heading:4", "heading:5", "heading:6", "bullet", "task", "quote"],
         [0, 1, 2, 3])

@@ -337,7 +337,7 @@ struct NoteStoreTests {
         store.moveNote(id: original.id, to: folderID)
         await store.flushPendingSave()
         let encoded = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
-        #expect(encoded["version"] as? Int == 1)
+        #expect(encoded["version"] as? Int == 2)
         let savedNotes = try #require(encoded["notes"] as? [[String: Any]])
         #expect(savedNotes.allSatisfy { $0["isFavorite"] == nil })
         let restored = NoteStore(directory: directory)

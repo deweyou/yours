@@ -2,17 +2,19 @@ import CryptoKit
 import Foundation
 
 struct NoteLibrary: Codable, Equatable, Sendable {
-    var version = 1
+    var version = 2
     var folders: [NoteFolder]
     var notes: [Note]
+    var todos = TodoLibrary()
 
     private enum CodingKeys: String, CodingKey {
-        case version, folders, notes
+        case version, folders, notes, todos
     }
 
-    init(folders: [NoteFolder] = [], notes: [Note] = []) {
+    init(folders: [NoteFolder] = [], notes: [Note] = [], todos: TodoLibrary = TodoLibrary()) {
         self.folders = folders
         self.notes = notes
+        self.todos = todos
     }
 
     init(from decoder: any Decoder) throws {
@@ -28,12 +30,14 @@ struct NoteLibrary: Codable, Equatable, Sendable {
         }
         let container = try decoder.container(keyedBy: CodingKeys.self)
         version = try container.decode(Int.self, forKey: .version)
-        guard version == 1 else {
+        guard version == 1 || version == 2 else {
             throw DecodingError.dataCorruptedError(
                 forKey: .version, in: container, debugDescription: "Unsupported note library version.")
         }
         folders = try container.decode([NoteFolder].self, forKey: .folders)
         notes = try container.decode([Note].self, forKey: .notes)
+        if version == 2 { todos = try container.decode(TodoLibrary.self, forKey: .todos) }
+        version = 2
     }
 }
 
@@ -46,13 +50,18 @@ extension NoteLibrary {
     }
 
     func hasSameContent(as other: NoteLibrary?) -> Bool {
-        guard let other, version == other.version, folders == other.folders, notes.count == other.notes.count else { return false }
+        guard let other, version == other.version, folders == other.folders, todos.hasSameContent(as: other.todos),
+            notes.count == other.notes.count
+        else {
+            return false
+        }
         return zip(notes, other.notes).allSatisfy { Self.equivalent($0, $1) }
     }
 
     func validate() throws {
         let folderIDs = Set(folders.map(\.id))
-        guard version == 1, Set(notes.map(\.id)).count == notes.count,
+        try todos.validate()
+        guard version == 2, Set(notes.map(\.id)).count == notes.count,
             folderIDs.count == folders.count,
             folders.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
             notes.allSatisfy({ $0.folderID.map { folderIDs.contains($0) } ?? true })
@@ -104,7 +113,7 @@ extension NoteLibrary {
             folders: mergedFolders.values.sorted { $0.id.uuidString < $1.id.uuidString },
             notes: mergedNotes.values.sorted {
                 $0.updatedAt == $1.updatedAt ? $0.id.uuidString < $1.id.uuidString : $0.updatedAt > $1.updatedAt
-            })
+            }, todos: try todos.merging(remote.todos, base: base?.todos))
         try merged.validate()
         return merged
     }

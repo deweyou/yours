@@ -174,6 +174,7 @@ final class RenderedContentAttachment: NSTextAttachment {
 
 @Observable @MainActor
 final class RenderedContentModel {
+    var isEditable = true
     var content: RenderedContent
     var width: CGFloat = 300
     var fontSize: CGFloat = 18
@@ -200,6 +201,7 @@ struct RenderedContentView: View {
 
     private func beginEditing() {
         model.onSelect()
+        guard model.isEditable else { return }
         if model.content.kind == .mermaid {
             editingContent = model.content
         } else {
@@ -388,6 +390,7 @@ final class RenderedContentOverlayController {
                     view.addSubview(entry.host.view)
                 #endif
             }
+            entry.model.isEditable = view.isEditable
             entry.model.content = content
             entry.model.width = max(80, container.size.width - 2 * container.lineFragmentPadding)
             entry.model.fontSize = (storage.attribute(.font, at: range.location, effectiveRange: nil) as? PlatformFont)?.pointSize ?? 18

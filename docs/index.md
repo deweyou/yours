@@ -7,6 +7,8 @@
 | 复制粘贴测试 Markdown | [无图片样本](examples/markdown-paste-sample.md) | 复制文件原始文本，粘贴到正文；步骤见[验证](verification.md#markdown-粘贴样本) |
 | 查看 Markdown 全集与实际效果 | [效果手册](examples/markdown-showcase.md) | Mac 复制正文粘贴、移动端可导入；已支持能力与兼容性对照分开标注 |
 | 本期做什么、未来做什么 | [产品](product.md)、[本期规格](specs/first-release.md) | 用户本次范围 |
+| 独立任务 MVP 做到哪里、还有哪些后续项 | [任务功能讨论稿](specs/tasks.md) | 已接入独立任务 MVP；重复/预计时长/文档 Todo 聚合暂缓 |
+| 任务产品有哪些共同做法、不同取舍和边界问题 | [任务产品研究](research/task-apps.md) | Things 3 / Todoist / TickTick / Apple 官方来源、读取边界与场景库 |
 | 代码在哪里、数据如何保存 | [架构](architecture.md) | `Sources/Yours` |
 | iCloud、开发数据隔离与旧测试文档在哪里 | [存储与同步](storage-and-sync.md) | `AppStorage`、`CloudLibrarySync`、签名授权 |
 | CloudKit 占谁的空间、正式环境需要准备什么 | [概念与空间归属](storage-and-sync.md#cloudkit-概念与空间归属)、[正式环境准备](storage-and-sync.md#正式环境准备尚未完成) | 私有数据库、容器绑定、schema 部署与 App 自动建记录 |
@@ -26,4 +28,4 @@
 
 每项结论标明“现状”“方向”或“待验证”。当前知识不记流水账、历史失败日志或已放弃方案；任务推理和执行证据保留在任务记录 / Run 中。引用代码用文件和符号，避免容易漂移的行号。新增独立决策文档只用于有长期影响的取舍，不为小修复制造文档层级。
 
-_Last updated: 2026-09-28 — 补充 Slash 与选区格式入口、共享事务和验证边界。Evidence: `EditorCommands.swift`, `NativeRichTextEditor.swift`, `EditorCommandContractTests.swift`, `NativeCommandTests.swift`._
+_Last updated: 2026-10-26 — 增加独立任务功能讨论稿与官方产品研究入口。_
