@@ -388,10 +388,12 @@ final class YoursUITests: XCTestCase {
             app.navigationBars.buttons.element(boundBy: 0).tap()
             XCTAssertTrue(app.buttons["workspace-tasks"].waitForExistence(timeout: 5))
             app.buttons["workspace-tasks"].tap()
-            let taskPlaceholder = app.staticTexts.matching(
-                NSPredicate(format: "label CONTAINS %@", "任务稍后推出")
-            ).firstMatch
-            XCTAssertTrue(taskPlaceholder.waitForExistence(timeout: 5))
+            let quickAdd = app.textFields["todo-quick-add"]
+            XCTAssertTrue(quickAdd.waitForExistence(timeout: 5))
+            quickAdd.tap()
+            quickAdd.typeText("Mobile task\n")
+            let taskTitle = app.textViews.matching(NSPredicate(format: "value == %@", "Mobile task")).firstMatch
+            XCTAssertTrue(taskTitle.waitForExistence(timeout: 5))
         }
 
         func testMobileLibraryOrganizationAndRestoration() {

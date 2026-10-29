@@ -55,6 +55,10 @@ struct YoursApp: App {
     var body: some Scene {
         WindowGroup {
             WorkspaceView(store: store)
+                .task(id: store.todos.reminders(after: .distantPast)) {
+                    let failure = await TodoNotifications.shared.reconcile(store.todos)
+                    if !Task.isCancelled { store.todoReminderError = failure }
+                }
                 #if os(macOS)
                     .onAppear {
                         appDelegate.store = store
@@ -95,8 +99,13 @@ struct YoursApp: App {
                     .disabled(markdownActions == nil)
                 }
                 CommandGroup(replacing: .newItem) {
-                    Button(L10n.string("note.create"), systemImage: "square.and.pencil") {
-                        navigation?.createNote(in: store)
+                    Button(L10n.string(navigation?.destination == .tasks ? "todo.create" : "note.create"), systemImage: "square.and.pencil")
+                    {
+                        if navigation?.destination == .tasks {
+                            store.createTodo(undoManager: NSApp.keyWindow?.undoManager)
+                        } else {
+                            navigation?.createNote(in: store)
+                        }
                     }
                     .keyboardShortcut("n", modifiers: .command)
                     .disabled(store.loadError != nil || navigation == nil)

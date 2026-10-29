@@ -1739,12 +1739,17 @@ enum NativeTextAttributes {
             return CTFontCopyFamilyName(fallback) as String
         })
 
-    static func displayFont(_ font: CTFont, emphasis: Int = 0, role: String = "body") -> CTFont {
+    static func displayFont(_ font: CTFont, emphasis: Int = 0, role: String = "body", usesDocumentFont: Bool = true) -> CTFont {
         let size = CTFontGetSize(font) * readingScale
         let system = PlatformFont.systemFont(ofSize: CTFontGetSize(font)) as CTFont
         let traits = CTFontGetSymbolicTraits(font)
         let family = CTFontCopyFamilyName(font) as String
         let isSystem = family == CTFontCopyFamilyName(system) as String || systemChineseFamilies.contains(family)
+        if !usesDocumentFont, !traits.contains(.traitMonoSpace) {
+            let descriptor = CTFontDescriptorCreateCopyWithAttributes(
+                CTFontCopyFontDescriptor(system), [kCTFontTraitsAttribute: CTFontCopyTraits(font)] as CFDictionary)
+            return CTFontCreateWithFontDescriptor(descriptor, size, nil)
+        }
         guard !traits.contains(.traitMonoSpace), isSystem, BundledSerifFont.isRegistered
         else { return CTFontCreateCopyWithAttributes(font, size, nil, nil) }
         let name: String
@@ -1764,8 +1769,11 @@ enum NativeTextAttributes {
         CTFontCreateCopyWithAttributes(original ?? font, CTFontGetSize(font) / readingScale, nil, nil)
     }
 
-    static func setFont(_ font: CTFont, emphasis: Int = 0, role: String = "body", in attributes: inout [NSAttributedString.Key: Any]) {
-        attributes[.font] = displayFont(font, emphasis: emphasis, role: role)
+    static func setFont(
+        _ font: CTFont, emphasis: Int = 0, role: String = "body", usesDocumentFont: Bool = true,
+        in attributes: inout [NSAttributedString.Key: Any]
+    ) {
+        attributes[.font] = displayFont(font, emphasis: emphasis, role: role, usesDocumentFont: usesDocumentFont)
         // This native-only attribute travels with typing, undo and copied spans.
         // It is deliberately absent from NoteAttributeScope and removed by rich().
         attributes[.yoursStoredFont] = font
@@ -2024,7 +2032,7 @@ enum NativeTextAttributes {
         }
     }
 
-    @MainActor static func native(_ text: AttributedString, context: Font.Context) -> NSAttributedString {
+    @MainActor static func native(_ text: AttributedString, context: Font.Context, usesDocumentFont: Bool = true) -> NSAttributedString {
         let result = NSMutableAttributedString(string: String(text.characters))
         for run in text.runs {
             let range = NSRange(run.range, in: text)
@@ -2036,7 +2044,7 @@ enum NativeTextAttributes {
                 ? DocumentTypography.font(
                     for: role, emphasis: emphasis, inlineCode: run[CodeStyleAttribute.self] == "inline", context: context)
                 : run.font ?? .body
-            setFont(font.resolve(in: context).ctFont, emphasis: emphasis, role: role, in: &attributes)
+            setFont(font.resolve(in: context).ctFont, emphasis: emphasis, role: role, usesDocumentFont: usesDocumentFont, in: &attributes)
             attributes[.yoursInlineEmphasis] = emphasis
             if let style = run[ParagraphStyleAttribute.self] { attributes[.yoursParagraphStyle] = style }
             if run[QuoteAttribute.self] == true { attributes[.yoursQuote] = true }

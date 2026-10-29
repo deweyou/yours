@@ -56,6 +56,12 @@
 
 ## 数据与恢复
 
+独立任务 MVP：`TodoLibrary` / `TodoItem` 保存项目、父子关系、三态、计划日、DDL、执行时段和软删除；`TodoWorkspaceView` 为共享原生入口。任务备注复用 `Note` 的属性编码与原生编辑桥接，不进入文档 gallery。`NoteStore.todos` 与文档共用落盘、失败重试和退出等待，任务详情注册编辑会话保护远端合并。
+
+资料库 envelope 升级为 v2，增加必需的 `todos` 字段；v1 与旧数组可读取，未知版本和损坏任务图拒绝加载。旧构建不支持 v2，应拒绝读取，不能与新构建交替写同一资料库。Package 与 Xcode target 均包含新增模型和视图。
+
+任务同步合并独立 ID 的修改，同一 ID 两端并发变更暂停并显式报错；回收站到期后清除内容，保留最小身份标记防止离线端回传复活。不是字段级协作/冲突解决方案，重复尚未接入；本地通知由 TodoNotifications 串行调度，资料库同步不等于通知交付。
+
 正式版应用标识为 `app.yours.editor`、存储目录为 `Yours`；Debug 标识为 `app.yours.editor.development`、固定开发目录为 `YoursDevelopment`。有效测试 UUID 使用独立的 `YoursUITests/<UUID>` 目录。路径和偏好统一由 `AppStorage` 决定，旧开发文档保留原位，不自动迁入正式资料库。应用偏好、富文本与剪贴板自定义标识统一使用 `yours`。更名不迁移开发期 Weave 数据。
 
 `Note.richText` 是主数据，`text` 为正文搜索和摘要使用的纯文本投影，`Note.title` 是独立持久化的纯文本字段，搜索同时匹配标题和正文。缺少标题分离标记的旧记录将首个非空行迁移为标题，并从正文中移除该行；其余富文本属性保持不变。迁移后的记录保存分离标记，后续不再根据正文猜测；显式空标题保持为空。`NoteAttributeScope` 保存 SwiftUI 属性、`CodeStyleAttribute`、`CodeLanguageAttribute`、`ParagraphStyleAttribute`、`QuoteAttribute`、`TaskStateAttribute`、`InlineEmphasisAttribute`、`ListMarkerAttribute` 与 `TableAttribute`。代码属性区分 inline 与带 ID 的 block；段落属性保存标题、列表、任务和代码等内部角色，引用通过独立布尔属性叠加，因此可以包住这些段落类型。引用竖线和默认次要文字色只在原生显示层生成，不写入 Markdown 内容或用户颜色；旧引用的 `│ ` 前缀与旧 quote 段落角色在读取时迁移。任务完成状态独立保存且正文不包含 checkbox 占位字符，旧任务的 `☐ / ☑` 前缀在读取时迁移为该属性。行内强调以独立标志保存加粗和斜体，经过原生桥接、存储和结构化剪贴板保留，避免与标题自身的字重混淆。无序圆点和有序编号由 `ListMarkerAttribute` 保存，原生布局在正文左侧绘制，正文与选区不包含标记字符；缩进仍使用 Tab，不是完整结构化列表树。显示标记按三层循环；嵌套有序列表根据父项边界重新计数，主级保留指定起始值，Markdown 仍使用数字编号。旧记录仅对明确的列表角色迁移旧文本标记，先校验旧纯文本投影再迁移，重复读取不再剥离正文开头的数字。
@@ -144,3 +150,6 @@ _Last updated: 2026-09-28 — 补充 Slash 与选区格式入口、共享事务�
 `DocumentContentRenderer` 使用随包分发的 KaTeX/Mermaid，在非持久化 WKWebView 中离线渲染并生成图像，最多同时两个实例，缓存最近 32 个结果。临时尺寸和像素不进入笔记数据。macOS 为 WebKit 子进程启用 network-client entitlement；页面只允许本地导航且 CSP 禁止网络，KaTeX 禁止 trust，Mermaid 使用 strict；源长度、展开次数、边数和图像尺寸有限制。渲染失败显示可点击的错误占位，源码仍可编辑和导出。
 
 `RenderedContentOverlayController` 把 SwiftUI 渲染视图放在 TextKit 附件的位置；单击选中对象并编辑源码。公式浮层通过临时附件更新正文预览，关闭时通过 coordinator 提交一次撤销；Mermaid 使用 sheet，取消不写回、应用注册撤销。`RenderedContentDraft` 隔离草稿与持久化，以 250 ms 防抖更新预览，取消和代次校验阻止过期结果覆盖；错误保留上次有效图像。`SourceCodeEditor` 使用原生文本输入实现基础高亮、缩进与 Mermaid 行号，组合输入期间不刷新源码或高亮。异步完成后按对象身份与源码重新查找位置，移除、切换文档或过期编辑不能写回旧位置。脚本与资源更新说明见 `scripts/document-rendering/README.md`。
+
+
+任务时间安排由 `TodoArrangement` 表达日期、可选结束时刻及独立提醒。`TodoItem.schedule` 在缺少新字段时投影旧 plannedDate/slots，首次编辑原子转换并清空旧字段；身份保持稳定，备注富文本不参与转换。时间安排仍属于 NoteLibrary 的任务快照，校验、撤销和同步冲突沿用原边界。TodoNotifications 只投递未来且未结束/未删除任务的本地提醒，用户主动启用时才请求授权；App 根视图观察提醒计划，不依赖任务页常驻。真实通知、跨时区与跨设备投递未由构建证明。

@@ -5,6 +5,37 @@ import Testing
 
 @MainActor
 struct CloudLibrarySyncTests {
+    @Test func taskPayloadUsesExistingCheckpointAndWaitsForOpenTaskEditor() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        fixture.preferences.iCloudSyncEnabled = true
+        var todos = fixture.store.todos
+        let created = todos.create(title: "Task from Mac")
+        let id = try #require(created)
+        todos.update(id) {
+            $0.content.richText = MarkdownFormatting.render("**Notes**\n- [x] Check")
+            $0.slots = [TodoTimeSlot(start: .now, end: .now.addingTimeInterval(3600))]
+        }
+        fixture.store.updateTodos(todos)
+        await fixture.sync.synchronize()
+        #expect(fixture.sync.errorMessage == nil)
+        #expect(fixture.transport.remote.todos == todos)
+
+        var incoming = fixture.transport.remote
+        incoming.todos.update(id) { $0.content.title = "Edited on phone" }
+        fixture.transport.remote = incoming
+        let editor = UUID()
+        fixture.store.registerEditor(editor, noteID: id)
+        await fixture.sync.synchronize()
+        #expect(fixture.sync.errorMessage == LibrarySyncError.editorOpen.localizedDescription)
+        #expect(fixture.store.todos.item(id)?.content.title == "Task from Mac")
+        fixture.store.unregisterEditor(editor)
+        await fixture.sync.synchronize()
+        #expect(fixture.sync.errorMessage == nil)
+        #expect(fixture.store.todos.item(id)?.content.title == "Edited on phone")
+        #expect(NoteStore(directory: fixture.storage.directory).todos == fixture.store.todos)
+    }
+
     private func makeNote(_ body: String, id: UUID = UUID()) -> Note {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         return Note(id: id, text: body, createdAt: date, updatedAt: date, title: "中文 👋")

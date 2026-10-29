@@ -150,7 +150,7 @@
                         HStack {
                             Label("navigation.tasks", systemImage: "checklist")
                             Spacer()
-                            Text("common.coming_soon").font(.caption).foregroundStyle(.secondary)
+
                         }
                     }
                     .accessibilityIdentifier("workspace-tasks")
@@ -215,8 +215,7 @@
             } else if case .document(let id) = library {
                 editor(id)
             } else if library == .tasks {
-                ContentUnavailableView(
-                    "tasks.coming_soon.title", systemImage: "checklist", description: Text("tasks.coming_soon.description"))
+                TodoWorkspaceView(store: store)
             } else {
                 RecordGallery(notes: notes, scrollState: galleryScroll) { note in
                     Button {

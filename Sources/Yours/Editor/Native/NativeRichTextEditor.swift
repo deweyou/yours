@@ -12,11 +12,57 @@ struct NativeRichTextEditor {
     @Binding var selection: AttributedTextSelection
     var commandBridge: EditorCommandBridge?
     var documentID: UUID?
+    var isEditable = true
+    var usesDocumentFont = true
+    var horizontalInset: CGFloat?
+    var placeholder: String?
+    var contentHeightRange: ClosedRange<CGFloat>?
     var focusWhenEmpty = true
     var focusRequest = 0
     var onEditLink: () -> Void = {}
     var onToast: (ToastMessage) -> Void = { _ in }
     @Environment(\.fontResolutionContext) private var fontContext
+
+    /// Draw transient hint glyphs with the editor's text container and typing attributes.
+    /// The hint never enters the document storage, selection, undo history or saved content.
+    fileprivate static func drawPlaceholder(
+        _ placeholder: String?, attributes: [NSAttributedString.Key: Any],
+        origin: CGPoint, width: CGFloat
+    ) {
+        guard let placeholder, !placeholder.isEmpty, width > 0 else { return }
+        var attributes = attributes
+        #if os(macOS)
+            attributes[.foregroundColor] = NSColor.placeholderTextColor
+        #else
+            attributes[.foregroundColor] = UIColor.placeholderText
+        #endif
+        let storage = NSTextStorage(attributedString: NSAttributedString(string: placeholder, attributes: attributes))
+        let layout = CodeLayoutManager()
+        let container = CodeTextContainer(size: CGSize(width: width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
+        let glyphs = layout.glyphRange(for: container)
+        layout.drawGlyphs(forGlyphRange: glyphs, at: origin)
+    }
+
+    /// Optional task-note sizing uses a separate layout, leaving the active editor and selection untouched.
+    fileprivate static func fittedContentHeight(
+        _ text: NSAttributedString, typingAttributes: [NSAttributedString.Key: Any],
+        width: CGFloat, top: CGFloat, bottom: CGFloat, range: ClosedRange<CGFloat>
+    ) -> CGFloat {
+        let measured = text.length == 0 ? NSAttributedString(string: " ", attributes: typingAttributes) : text
+        let storage = NSTextStorage(attributedString: measured)
+        let layout = CodeLayoutManager()
+        let container = CodeTextContainer(size: CGSize(width: max(1, width), height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
+        layout.ensureLayout(for: container)
+        let textBottom = max(layout.usedRect(for: container).maxY, layout.extraLineFragmentRect.maxY)
+        let height = ceil(textBottom + top + bottom)
+        return min(range.upperBound, max(range.lowerBound, height))
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -106,6 +152,16 @@ struct NativeRichTextEditor {
             #endif
         }
 
+        #if os(macOS)
+            private static func taskInsets(_ inset: CGFloat) -> NSSize {
+                NSSize(width: inset, height: DocumentTypography.editorTopInset)
+            }
+        #else
+            private static func taskInsets(_ inset: CGFloat) -> UIEdgeInsets {
+                UIEdgeInsets(top: DocumentTypography.editorTopInset, left: inset, bottom: DocumentTypography.editorTopInset, right: inset)
+            }
+        #endif
+
         func update(_ parent: NativeRichTextEditor) {
             if parent.documentID != self.parent.documentID {
                 revision += 1
@@ -113,6 +169,25 @@ struct NativeRichTextEditor {
             }
             self.parent = parent
             guard let textView, !hasMarkedText else { return }
+            textView.isEditable = parent.isEditable
+            textView.isSelectable = true
+            #if os(macOS)
+                (textView as? ReadingMacTextView)?.emptyPlaceholder = parent.placeholder
+                (textView as? ReadingMacTextView)?.usesDocumentFont = parent.usesDocumentFont
+            #else
+                (textView as? ReadingTextView)?.emptyPlaceholder = parent.placeholder
+            #endif
+            if let inset = parent.horizontalInset {
+                textView.textContainerInset = Self.taskInsets(inset)
+                #if os(macOS)
+                    (textView.enclosingScrollView as? ReadingScrollView)?.preferredInset = inset
+                    textView.textContainer?.lineFragmentPadding = 0
+                #else
+                    (textView as? ReadingTextView)?.preferredInset = inset
+                    textView.textContainer.lineFragmentPadding = 0
+                #endif
+            }
+            if !parent.isEditable { dismissControls() }
             isUpdating = true
             defer {
                 isUpdating = false
@@ -127,7 +202,8 @@ struct NativeRichTextEditor {
                 #if os(macOS)
                     (textView.layoutManager as? CodeLayoutManager)?.clearLinkHover()
                 #endif
-                storage?.setAttributedString(NativeTextAttributes.native(parent.text, context: parent.fontContext))
+                storage?.setAttributedString(
+                    NativeTextAttributes.native(parent.text, context: parent.fontContext, usesDocumentFont: parent.usesDocumentFont))
                 lastValue = parent.text
             }
             var range: NSRange
@@ -144,7 +220,8 @@ struct NativeRichTextEditor {
             let paragraphRange = source.paragraphRange(for: NSRange(location: min(range.location, source.length), length: 0))
             let isBlank = source.substring(with: paragraphRange).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             let sample = NativeTextAttributes.native(
-                AttributedString(isBlank ? "\n" : " ", attributes: attributes), context: parent.fontContext)
+                AttributedString(isBlank ? "\n" : " ", attributes: attributes), context: parent.fontContext,
+                usesDocumentFont: parent.usesDocumentFont)
             var nativeAttributes = sample.attributes(at: 0, effectiveRange: nil)
             // A synthetic space has body margins. Reuse the actual paragraph's
             // layout when restoring typing state so clicking cannot change its height.
@@ -261,7 +338,7 @@ struct NativeRichTextEditor {
                 },
                 onToast: { [weak self] message in self?.parent.onToast(message) })
             tables.refresh(
-                in: textView,
+                in: textView, usesDocumentFont: parent.usesDocumentFont,
                 onChange: { [weak self] id, table in
                     self?.changeTable(id: id, table: table)
                 },
@@ -272,6 +349,7 @@ struct NativeRichTextEditor {
         }
 
         func changeCodeLanguage(id: String, language: String) {
+            guard parent.isEditable else { return }
             guard !hasMarkedText, let storage, let view = textView else { return }
             var target: NSRange?
             storage.enumerateAttribute(.yoursCodeStyle, in: NSRange(location: 0, length: storage.length)) { value, range, stop in
@@ -304,6 +382,7 @@ struct NativeRichTextEditor {
         }
 
         func formatCode(id: String) async throws {
+            guard parent.isEditable else { return }
             guard !hasMarkedText, let storage, let target = codeRange(id: id, in: storage) else {
                 throw CodeFormatting.Failure.changed
             }
@@ -316,6 +395,7 @@ struct NativeRichTextEditor {
         }
 
         func applyFormattedCode(_ formatted: String, id: String, snapshot: NSAttributedString) throws {
+            guard parent.isEditable else { throw CodeFormatting.Failure.changed }
             guard !hasMarkedText, let view = textView, let current = storage,
                 let target = codeRange(id: id, in: current),
                 current.attributedSubstring(from: target).isEqual(to: snapshot)
@@ -349,7 +429,7 @@ struct NativeRichTextEditor {
             var sample = AttributedString("\n")
             sample.font = .body
             sample[ParagraphStyleAttribute.self] = "body"
-            let native = NativeTextAttributes.native(sample, context: parent.fontContext)
+            let native = NativeTextAttributes.native(sample, context: parent.fontContext, usesDocumentFont: parent.usesDocumentFont)
             let attributes = native.attributes(at: 0, effectiveRange: nil)
             if offset == storage.length || (storage.string as NSString).substring(with: NSRange(location: offset, length: 1)) != "\n" {
                 registerUndo(
@@ -384,7 +464,8 @@ struct NativeRichTextEditor {
                 var body = AttributedString(" ")
                 body.font = .body
                 body[ParagraphStyleAttribute.self] = "body"
-                let attributes = NativeTextAttributes.native(body, context: parent.fontContext).attributes(at: 0, effectiveRange: nil)
+                let attributes = NativeTextAttributes.native(body, context: parent.fontContext, usesDocumentFont: parent.usesDocumentFont)
+                    .attributes(at: 0, effectiveRange: nil)
                 let next = NSMutableAttributedString(attributedString: storage)
                 next.setAttributes(attributes, range: paragraph)
                 registerUndo(
@@ -406,6 +487,7 @@ struct NativeRichTextEditor {
         }
 
         func copyStructured(cut: Bool) -> Bool {
+            guard !cut || parent.isEditable else { return false }
             guard !hasMarkedText, let storage, let view = textView, currentSelection.length > 0 else { return false }
             let range = currentSelection
             let selected = NativeTextAttributes.rich(storage.attributedSubstring(from: range))
@@ -441,7 +523,8 @@ struct NativeRichTextEditor {
                 var body = AttributedString(" ")
                 body.font = .body
                 body[ParagraphStyleAttribute.self] = "body"
-                let attributes = NativeTextAttributes.native(body, context: parent.fontContext).attributes(at: 0, effectiveRange: nil)
+                let attributes = NativeTextAttributes.native(body, context: parent.fontContext, usesDocumentFont: parent.usesDocumentFont)
+                    .attributes(at: 0, effectiveRange: nil)
                 let originalParagraph = (storage.string as NSString).paragraphRange(for: NSRange(location: range.location, length: 0))
                 let remainingParagraph = (next.string as NSString).paragraphRange(for: NSRange(location: range.location, length: 0))
                 if range.location == originalParagraph.location, NSMaxRange(range) > NSMaxRange(originalParagraph),
@@ -458,6 +541,7 @@ struct NativeRichTextEditor {
         }
 
         func pasteStructured() -> Bool {
+            guard parent.isEditable else { return false }
             dismissControls()
             #if os(macOS)
                 let pasteboard = NSPasteboard.general
@@ -514,7 +598,8 @@ struct NativeRichTextEditor {
                 text = boundary + text
                 if let native = nativeFormulas {
                     let prefixed = NSMutableAttributedString(
-                        attributedString: NativeTextAttributes.native(boundary, context: parent.fontContext))
+                        attributedString: NativeTextAttributes.native(
+                            boundary, context: parent.fontContext, usesDocumentFont: parent.usesDocumentFont))
                     prefixed.append(native)
                     nativeFormulas = prefixed
                 }
@@ -525,24 +610,28 @@ struct NativeRichTextEditor {
                 text += boundary
                 if let native = nativeFormulas {
                     let suffixed = NSMutableAttributedString(attributedString: native)
-                    suffixed.append(NativeTextAttributes.native(boundary, context: parent.fontContext))
+                    suffixed.append(
+                        NativeTextAttributes.native(boundary, context: parent.fontContext, usesDocumentFont: parent.usesDocumentFont))
                     nativeFormulas = suffixed
                 }
             }
-            let inserted = nativeFormulas ?? NativeTextAttributes.native(text, context: parent.fontContext)
+            let inserted =
+                nativeFormulas ?? NativeTextAttributes.native(text, context: parent.fontContext, usesDocumentFont: parent.usesDocumentFont)
             registerUndo(text: NSAttributedString(attributedString: storage), selection: range, attributes: view.typingAttributes)
             let next = NSMutableAttributedString(attributedString: storage)
             next.replaceCharacters(in: range, with: inserted)
             var body = AttributedString(" ")
             body.font = .body
             body[ParagraphStyleAttribute.self] = "body"
-            let attributes = NativeTextAttributes.native(body, context: parent.fontContext).attributes(at: 0, effectiveRange: nil)
+            let attributes = NativeTextAttributes.native(body, context: parent.fontContext, usesDocumentFont: parent.usesDocumentFont)
+                .attributes(at: 0, effectiveRange: nil)
             apply(text: next, selection: NSRange(location: range.location + inserted.length, length: 0), attributes: attributes)
             view.undoManager?.setActionName(L10n.string("edit.paste"))
             return true
         }
 
         func changeRenderedContent(original: RenderedContent, source: String) {
+            guard parent.isEditable else { return }
             guard !hasMarkedText, source != original.source, let storage, let view = textView else { return }
             var target: NSRange?
             storage.enumerateAttribute(.yoursRenderedContent, in: NSRange(location: 0, length: storage.length)) { value, range, stop in
@@ -562,11 +651,13 @@ struct NativeRichTextEditor {
             next.addAttribute(.attachment, value: RenderedContentAttachment(content: content), range: target)
             var body = AttributedString(" ")
             body.font = .body
-            let attributes = NativeTextAttributes.native(body, context: parent.fontContext).attributes(at: 0, effectiveRange: nil)
+            let attributes = NativeTextAttributes.native(body, context: parent.fontContext, usesDocumentFont: parent.usesDocumentFont)
+                .attributes(at: 0, effectiveRange: nil)
             apply(text: next, selection: NSRange(location: NSMaxRange(target), length: 0), attributes: attributes)
         }
 
         func changeTable(id: UUID, table: TableData) {
+            guard parent.isEditable else { return }
             guard let storage, let view = textView else { return }
             var target: NSRange?
             storage.enumerateAttribute(.yoursTable, in: NSRange(location: 0, length: storage.length)) { value, range, stop in
@@ -588,6 +679,7 @@ struct NativeRichTextEditor {
         }
 
         func intercept(range: NSRange, replacement: String?) -> Bool {
+            guard parent.isEditable else { return false }
             guard !isUpdating, !hasMarkedText, let textView, let storage, let replacement,
                 textView.undoManager?.isUndoing != true, textView.undoManager?.isRedoing != true
             else { return true }
@@ -687,7 +779,7 @@ struct NativeRichTextEditor {
                 case .ranges(let ranges): after = ranges.ranges.first.map { NSRange($0, in: value) } ?? context.selection
                 }
                 apply(
-                    text: NativeTextAttributes.native(value, context: parent.fontContext),
+                    text: NativeTextAttributes.native(value, context: parent.fontContext, usesDocumentFont: parent.usesDocumentFont),
                     selection: after,
                     attributes: textView.typingAttributes)
                 textView.undoManager?.setActionName(L10n.string("code.indent"))
@@ -777,7 +869,7 @@ struct NativeRichTextEditor {
                 font.resolve(in: parent.fontContext).ctFont,
                 emphasis: edit.style == .italic ? 2 : edit.style == .bold ? 1 : 0,
                 role: displayRole,
-                in: &attributes)
+                usesDocumentFont: parent.usesDocumentFont, in: &attributes)
             switch edit.style {
             case .heading(let level):
                 attributes[.yoursInlineEmphasis] = 0
@@ -806,7 +898,8 @@ struct NativeRichTextEditor {
                     quoteSample.font = .body
                     quoteSample[ParagraphStyleAttribute.self] = "body"
                     quoteSample[QuoteAttribute.self] = true
-                    let nativeQuote = NativeTextAttributes.native(quoteSample, context: parent.fontContext)
+                    let nativeQuote = NativeTextAttributes.native(
+                        quoteSample, context: parent.fontContext, usesDocumentFont: parent.usesDocumentFont)
                     attributes[.paragraphStyle] = nativeQuote.attribute(.paragraphStyle, at: 0, effectiveRange: nil)
                 case .numbered: attributes[.yoursParagraphStyle] = "numbered"
                 case .bullet: attributes[.yoursParagraphStyle] = "bullet"
@@ -824,7 +917,8 @@ struct NativeRichTextEditor {
                     var bodySample = AttributedString("\n")
                     bodySample.font = .body
                     bodySample[ParagraphStyleAttribute.self] = "body"
-                    let nativeBody = NativeTextAttributes.native(bodySample, context: parent.fontContext)
+                    let nativeBody = NativeTextAttributes.native(
+                        bodySample, context: parent.fontContext, usesDocumentFont: parent.usesDocumentFont)
                     attributes[.paragraphStyle] = nativeBody.attribute(.paragraphStyle, at: 0, effectiveRange: nil)
                 }
                 attributes.removeValue(forKey: .yoursCodeStyle)
@@ -883,7 +977,7 @@ struct NativeRichTextEditor {
                         emphasis: (content.attribute(.yoursInlineEmphasis, at: runRange.location, effectiveRange: nil) as? Int ?? 0)
                             | (edit.style == .italic ? 2 : edit.style == .bold ? 1 : 0),
                         role: content.attribute(.yoursParagraphStyle, at: runRange.location, effectiveRange: nil) as? String ?? "body",
-                        in: &fontAttributes)
+                        usesDocumentFont: parent.usesDocumentFont, in: &fontAttributes)
                     content.addAttributes(fontAttributes, range: runRange)
                 }
                 if edit.style == .bold || edit.style == .italic {
@@ -1001,13 +1095,14 @@ struct NativeRichTextEditor {
         }
 
         func exitTrailingCode() -> Bool {
+            guard parent.isEditable else { return false }
             guard !hasMarkedText, let storage, let view = textView, storage.length > 0,
                 (storage.attribute(.yoursCodeStyle, at: storage.length - 1, effectiveRange: nil) as? String)?.hasPrefix("block:") == true
             else { return false }
             var body = AttributedString("\n")
             body.font = .body
             body[ParagraphStyleAttribute.self] = "body"
-            let boundary = NativeTextAttributes.native(body, context: parent.fontContext)
+            let boundary = NativeTextAttributes.native(body, context: parent.fontContext, usesDocumentFont: parent.usesDocumentFont)
             let attributes = boundary.attributes(at: 0, effectiveRange: nil)
             registerUndo(
                 text: NSAttributedString(attributedString: storage), selection: currentSelection, attributes: view.typingAttributes)
@@ -1031,7 +1126,8 @@ struct NativeRichTextEditor {
             var body = AttributedString(" ")
             body.font = .body
             body[ParagraphStyleAttribute.self] = "body"
-            var attributes = NativeTextAttributes.native(body, context: parent.fontContext).attributes(at: 0, effectiveRange: nil)
+            var attributes = NativeTextAttributes.native(body, context: parent.fontContext, usesDocumentFont: parent.usesDocumentFont)
+                .attributes(at: 0, effectiveRange: nil)
             attributes.removeValue(forKey: .yoursQuote)
             attributes.removeValue(forKey: .yoursQuoteColor)
             registerUndo(
@@ -1042,6 +1138,7 @@ struct NativeRichTextEditor {
         }
 
         fileprivate func toggleTask(at index: Int) -> Bool {
+            guard parent.isEditable else { return false }
             guard !hasMarkedText, let storage, let view = textView, index < storage.length else { return false }
             let source = storage.string as NSString
             let paragraph = source.paragraphRange(for: NSRange(location: index, length: 0))
@@ -1059,6 +1156,7 @@ struct NativeRichTextEditor {
         }
 
         func toggleEmptyTask() -> Bool {
+            guard parent.isEditable else { return false }
             guard !hasMarkedText, let storage, let view = textView,
                 currentSelection.length == 0,
                 view.typingAttributes[.yoursParagraphStyle] as? String == "task",
@@ -1098,6 +1196,7 @@ struct NativeRichTextEditor {
         }
 
         func controlsAfterTyping() {
+            guard parent.isEditable else { return }
             guard !isUpdating, let storage, let view = textView else { return }
             guard !hasMarkedText else {
                 controls.close()
@@ -1121,6 +1220,7 @@ struct NativeRichTextEditor {
         }
 
         func controlsAfterSelection() {
+            guard parent.isEditable else { return }
             guard !isUpdating else { return }
             if controls.hasDetail {
                 guard currentSelection != controlsTargetRange else { return }
@@ -1135,6 +1235,7 @@ struct NativeRichTextEditor {
         }
 
         func refreshControls() {
+            guard parent.isEditable else { return }
             guard !isUpdating, !hasMarkedText, let view = textView, let storage else { return }
             if controls.hasDetail { return }
             let range = currentSelection
@@ -1253,6 +1354,7 @@ struct NativeRichTextEditor {
         }
 
         func presentControlDetail(_ kind: String, range capturedRange: NSRange? = nil) {
+            guard parent.isEditable else { return }
             guard !hasMarkedText, let view = textView, let storage else { return }
             let range = capturedRange ?? currentSelection
             controlsTargetRange = range
@@ -1280,6 +1382,7 @@ struct NativeRichTextEditor {
         }
 
         func performControlAction(_ action: EditorAction, range: NSRange, slash: NSRange? = nil) {
+            guard parent.isEditable else { return }
             #if os(macOS)
                 (textView as? ReadingMacTextView)?.discardInlineCodeBoundary()
             #endif
@@ -1313,9 +1416,10 @@ struct NativeRichTextEditor {
                 resultRange = NSRange(first.lowerBound..<last.upperBound, in: rich)
             }
             let typing = NativeTextAttributes.native(
-                AttributedString(" ", attributes: selection.typingAttributes(in: rich)), context: parent.fontContext
+                AttributedString(" ", attributes: selection.typingAttributes(in: rich)), context: parent.fontContext,
+                usesDocumentFont: parent.usesDocumentFont
             ).attributes(at: 0, effectiveRange: nil)
-            let next = NativeTextAttributes.native(rich, context: parent.fontContext)
+            let next = NativeTextAttributes.native(rich, context: parent.fontContext, usesDocumentFont: parent.usesDocumentFont)
             if next.isEqual(to: storage), NSDictionary(dictionary: typing).isEqual(to: view.typingAttributes) {
                 dismissControls()
                 return
@@ -1406,7 +1510,7 @@ struct NativeRichTextEditor {
             if resetLink { attributes.removeValue(forKey: .link) }
             NativeTextAttributes.setFont(
                 DocumentTypography.font(for: role, emphasis: emphasis, context: parent.fontContext).resolve(in: parent.fontContext).ctFont,
-                emphasis: emphasis, role: role, in: &attributes
+                emphasis: emphasis, role: role, usesDocumentFont: parent.usesDocumentFont, in: &attributes
             )
             pendingTypingAttributesAfterInlineDeletion = attributes
         }
@@ -1453,6 +1557,7 @@ struct NativeRichTextEditor {
         }
 
         private func apply(text: NSAttributedString, selection: NSRange, attributes: [NSAttributedString.Key: Any]) {
+            guard parent.isEditable else { return }
             revision += 1
             isUpdating = true
             storage?.setAttributedString(text)
@@ -1477,6 +1582,8 @@ struct NativeRichTextEditor {
 
 #if os(macOS)
     final class ReadingMacTextView: NSTextView {
+        var usesDocumentFont = true
+        var emptyPlaceholder: String? { didSet { if oldValue != emptyPlaceholder { needsDisplay = true } } }
         var selectionFocusChanged: ((Bool) -> Void)?
         override func becomeFirstResponder() -> Bool {
             let accepted = super.becomeFirstResponder()
@@ -1605,7 +1712,7 @@ struct NativeRichTextEditor {
                 let context = EnvironmentValues().fontResolutionContext
                 NativeTextAttributes.setFont(
                     DocumentTypography.font(for: role, emphasis: emphasis, context: context).resolve(in: context).ctFont,
-                    emphasis: emphasis, role: role, in: &attributes)
+                    emphasis: emphasis, role: role, usesDocumentFont: usesDocumentFont, in: &attributes)
             }
             attributes.removeValue(forKey: .attachment)
             attributes.removeValue(forKey: .yoursRenderedContent)
@@ -1841,6 +1948,11 @@ struct NativeRichTextEditor {
         }
         override func draw(_ dirtyRect: NSRect) {
             super.draw(dirtyRect)
+            if string.isEmpty, !hasMarkedText() {
+                NativeRichTextEditor.drawPlaceholder(
+                    emptyPlaceholder, attributes: typingAttributes,
+                    origin: textContainerOrigin, width: textContainer?.size.width ?? 0)
+            }
             quoteDecorationView?.needsDisplay = true
             if let layout = layoutManager as? CodeLayoutManager, let container = textContainer {
                 layout.drawEmptyListMarker(
@@ -1879,6 +1991,7 @@ struct NativeRichTextEditor {
             (super.accessibilityChildren() ?? []) + subviews.filter { $0 !== quoteDecorationView }
         }
         override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+            guard isEditable else { return nil }
             guard let storage = textStorage, let layout = layoutManager as? CodeLayoutManager else { return nil }
             let source = storage.string as NSString
             var actions: [NSAccessibilityCustomAction] = []
@@ -2169,6 +2282,7 @@ struct NativeRichTextEditor {
     }
 
     private final class ReadingScrollView: NSScrollView {
+        var preferredInset: CGFloat?
         override func scrollWheel(with event: NSEvent) {
             if (documentView as? ReadingMacTextView)?.scrollCode(with: event) == true { return }
             super.scrollWheel(with: event)
@@ -2177,7 +2291,7 @@ struct NativeRichTextEditor {
         override func tile() {
             super.tile()
             guard let view = documentView as? NSTextView else { return }
-            let inset = max(32, (contentSize.width - DocumentTypography.readingWidth) / 2)
+            let inset = preferredInset ?? max(32, (contentSize.width - DocumentTypography.readingWidth) / 2)
             if view.textContainerInset.width != inset {
                 view.textContainerInset = NSSize(width: inset, height: DocumentTypography.editorTopInset)
             }
@@ -2244,7 +2358,8 @@ struct NativeRichTextEditor {
             view.textContainerInset = NSSize(width: 32, height: DocumentTypography.editorTopInset)
             view.setAccessibilityLabel(L10n.string("note.body.accessibility_label"))
             view.setAccessibilityIdentifier("note-editor")
-            view.textStorage?.setAttributedString(NativeTextAttributes.native(text, context: fontContext))
+            view.textStorage?.setAttributedString(
+                NativeTextAttributes.native(text, context: fontContext, usesDocumentFont: usesDocumentFont))
             view.delegate = context.coordinator
             context.coordinator.textView = view
             commandBridge?.openLink = { [weak coordinator = context.coordinator] in coordinator?.presentControlDetail("link") }
@@ -2258,6 +2373,16 @@ struct NativeRichTextEditor {
                 DispatchQueue.main.async { [weak view] in view?.window?.makeFirstResponder(view) }
             }
             return scroll
+        }
+
+        func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+            guard let range = contentHeightRange, let view = nsView.documentView as? NSTextView else { return nil }
+            let width = proposal.width ?? nsView.bounds.width
+            let inset = horizontalInset ?? view.textContainerInset.width
+            let height = Self.fittedContentHeight(
+                view.attributedString(), typingAttributes: view.typingAttributes,
+                width: width - 2 * inset, top: view.textContainerInset.height, bottom: view.textContainerInset.height, range: range)
+            return CGSize(width: width, height: height)
         }
 
         func updateNSView(_ nsView: NSScrollView, context: Context) { context.coordinator.update(self) }
@@ -2337,6 +2462,8 @@ struct NativeRichTextEditor {
     }
 #else
     private final class ReadingTextView: UITextView, UIGestureRecognizerDelegate {
+        var emptyPlaceholder: String? { didSet { if oldValue != emptyPlaceholder { setNeedsDisplay() } } }
+        var preferredInset: CGFloat?
         private lazy var codePan = UIPanGestureRecognizer(target: self, action: #selector(scrollCodeHorizontally(_:)))
         var suppressSlash: ((Bool) -> Void)?
         private var panningCodeID: String?
@@ -2417,6 +2544,11 @@ struct NativeRichTextEditor {
         }
         override func draw(_ rect: CGRect) {
             super.draw(rect)
+            if textStorage.length == 0, markedTextRange == nil {
+                NativeRichTextEditor.drawPlaceholder(
+                    emptyPlaceholder, attributes: typingAttributes,
+                    origin: CGPoint(x: textContainerInset.left, y: textContainerInset.top), width: textContainer.size.width)
+            }
             if let layout = layoutManager as? CodeLayoutManager {
                 layout.drawEmptyListMarker(
                     selection: selectedRange, attributes: typingAttributes,
@@ -2505,7 +2637,7 @@ struct NativeRichTextEditor {
 
         private func refreshTaskAccessibilityActions() {
             let source = textStorage.string as NSString
-            guard textStorage.length > 0, let layout = layoutManager as? CodeLayoutManager else {
+            guard isEditable, textStorage.length > 0, let layout = layoutManager as? CodeLayoutManager else {
                 accessibilityCustomActions = nil
                 return
             }
@@ -2530,9 +2662,11 @@ struct NativeRichTextEditor {
         }
 
         override func layoutSubviews() {
-            let inset = max(24, (bounds.width - DocumentTypography.readingWidth) / 2)
+            let inset = preferredInset ?? max(24, (bounds.width - DocumentTypography.readingWidth) / 2)
             if textContainerInset.left != inset {
-                textContainerInset = UIEdgeInsets(top: DocumentTypography.editorTopInset, left: inset, bottom: 40, right: inset)
+                textContainerInset = UIEdgeInsets(
+                    top: DocumentTypography.editorTopInset, left: inset,
+                    bottom: preferredInset == nil ? 40 : DocumentTypography.editorTopInset, right: inset)
             }
             super.layoutSubviews()
             // Wide code fragments scroll inside their block, never the whole document.
@@ -2590,7 +2724,7 @@ struct NativeRichTextEditor {
             view.smartDashesType = .no
             view.accessibilityLabel = L10n.string("note.body.accessibility_label")
             view.accessibilityIdentifier = "note-editor"
-            view.attributedText = NativeTextAttributes.native(text, context: fontContext)
+            view.attributedText = NativeTextAttributes.native(text, context: fontContext, usesDocumentFont: usesDocumentFont)
             view.delegate = context.coordinator
             context.coordinator.textView = view
             commandBridge?.openLink = { [weak coordinator = context.coordinator] in coordinator?.presentControlDetail("link") }
@@ -2605,6 +2739,16 @@ struct NativeRichTextEditor {
             }
             return view
         }
+        func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
+            guard let range = contentHeightRange else { return nil }
+            let width = proposal.width ?? uiView.bounds.width
+            let inset = horizontalInset ?? uiView.textContainerInset.left
+            let height = Self.fittedContentHeight(
+                uiView.attributedText ?? NSAttributedString(), typingAttributes: uiView.typingAttributes,
+                width: width - 2 * inset, top: uiView.textContainerInset.top, bottom: uiView.textContainerInset.bottom, range: range)
+            return CGSize(width: width, height: height)
+        }
+
         func updateUIView(_ uiView: UITextView, context: Context) { context.coordinator.update(self) }
         static func dismantleUIView(_ uiView: UITextView, coordinator: Coordinator) { coordinator.dismissControls() }
     }
@@ -2619,7 +2763,7 @@ struct NativeRichTextEditor {
         }
 
         private func formattingMenu(ranges: [NSValue], suggestedActions: [UIMenuElement]) -> UIMenu {
-            guard ranges.count == 1, !hasMarkedText else { return UIMenu(children: suggestedActions) }
+            guard parent.isEditable, ranges.count == 1, !hasMarkedText else { return UIMenu(children: suggestedActions) }
             controlsAfterSelection()
             let expectedRevision = revision
             let range = ranges[0].rangeValue

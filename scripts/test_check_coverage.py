@@ -86,6 +86,18 @@ class CoverageGateTests(unittest.TestCase):
         self.entries[-2]["summary"]["lines"]["count"] = 1000
         self.assertFalse(evaluate(self.report(), self.root)[0])
 
+    def test_todo_workspace_is_ui_but_task_model_keeps_core_gate(self):
+        for name, count, covered in [("TodoWorkspaceView.swift", 10, 0), ("TodoLibrary.swift", 100, 100)]:
+            path = self.root / name
+            path.touch()
+            self.entries.append({"filename": str(path), "summary": {"lines": {"count": count, "covered": covered}}})
+        self.assertTrue(evaluate(self.report(), self.root)[0])
+        self.entries[-1]["summary"]["lines"]["covered"] = 0
+        self.assertFalse(evaluate(self.report(), self.root)[0])
+        self.entries[-1]["summary"]["lines"]["covered"] = 100
+        self.entries[-2]["summary"]["lines"]["count"] = 1000
+        self.assertFalse(evaluate(self.report(), self.root)[0])
+
     def test_rejects_invalid_counts(self):
         self.entries[0]["summary"]["lines"]["covered"] = 101
         with self.assertRaises(ValueError):
